@@ -1,3 +1,7 @@
+#:property PublishAot=false
+#:property PublishTrimmed=false
+#:property JsonSerializerIsReflectionEnabledByDefault=true
+
 using System.Diagnostics;
 using System.Net.Http.Json;
 using System.Runtime.InteropServices;
