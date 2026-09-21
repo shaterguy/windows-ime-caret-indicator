@@ -25,7 +25,7 @@ internal sealed class IndicatorOverlayForm : Form
         get
         {
             var parameters = base.CreateParams;
-            parameters.ExStyle |= 0x00000020 | 0x00000080 | 0x08000000;
+            parameters.ExStyle |= 0x00000020 | 0x00000080 | 0x00080000 | 0x08000000;
             return parameters;
         }
     }
