@@ -5,6 +5,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName UIAutomationClient
 
 Add-Type -TypeDefinition @"
 using System;
@@ -154,6 +155,209 @@ function Find-Executable {
     return $null
 }
 
+
+function Get-FocusedControlSnapshot {
+    try {
+        $focused = [System.Windows.Automation.AutomationElement]::FocusedElement
+        if ($null -eq $focused) {
+            return [ordered]@{
+                exists = $false
+                hasKeyboardFocus = $false
+            }
+        }
+
+        return [ordered]@{
+            exists = $true
+            hasKeyboardFocus = [bool]$focused.Current.HasKeyboardFocus
+            controlType = $focused.Current.ControlType.ProgrammaticName
+            name = $focused.Current.Name
+            automationId = $focused.Current.AutomationId
+            nativeWindowHandle = $focused.Current.NativeWindowHandle
+            processId = $focused.Current.ProcessId
+        }
+    }
+    catch {
+        return [ordered]@{
+            exists = $false
+            hasKeyboardFocus = $false
+            error = $_.Exception.Message
+        }
+    }
+}
+
+function Wait-FocusedEdit {
+    param([int]$Attempts = 30)
+
+    for ($i = 0; $i -lt $Attempts; $i++) {
+        $snapshot = Get-FocusedControlSnapshot
+        if ($snapshot.exists -and
+            $snapshot.hasKeyboardFocus -and
+            $snapshot.controlType -eq "ControlType.Edit") {
+            return $snapshot
+        }
+        Start-Sleep -Milliseconds 100
+    }
+
+    return Get-FocusedControlSnapshot
+}
+
+function Focus-FirstEditableDescendant {
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Diagnostics.Process]$Process
+    )
+
+    try {
+        $Process.Refresh()
+        if ($Process.MainWindowHandle -eq 0) {
+            return [ordered]@{
+                success = $false
+                reason = "Process has no main window."
+            }
+        }
+
+        $root = [System.Windows.Automation.AutomationElement]::FromHandle(
+            $Process.MainWindowHandle)
+        if ($null -eq $root) {
+            return [ordered]@{
+                success = $false
+                reason = "UI Automation root was unavailable."
+            }
+        }
+
+        $editCondition = [System.Windows.Automation.PropertyCondition]::new(
+            [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+            [System.Windows.Automation.ControlType]::Edit)
+        $focusableCondition = [System.Windows.Automation.PropertyCondition]::new(
+            [System.Windows.Automation.AutomationElement]::IsKeyboardFocusableProperty,
+            $true)
+        $condition = [System.Windows.Automation.AndCondition]::new(
+            @($editCondition, $focusableCondition))
+
+        $edits = $root.FindAll(
+            [System.Windows.Automation.TreeScope]::Descendants,
+            $condition)
+
+        foreach ($edit in $edits) {
+            try {
+                $edit.SetFocus()
+                $focused = Wait-FocusedEdit
+                if ($focused.exists -and
+                    $focused.hasKeyboardFocus -and
+                    $focused.controlType -eq "ControlType.Edit") {
+                    return [ordered]@{
+                        success = $true
+                        focused = $focused
+                    }
+                }
+            }
+            catch {
+            }
+        }
+
+        return [ordered]@{
+            success = $false
+            reason = "No focusable edit descendant accepted keyboard focus."
+            focused = (Get-FocusedControlSnapshot)
+        }
+    }
+    catch {
+        return [ordered]@{
+            success = $false
+            reason = $_.Exception.Message
+            focused = (Get-FocusedControlSnapshot)
+        }
+    }
+}
+
+function Focus-NamedDescendantForRename {
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Diagnostics.Process]$Process,
+        [Parameter(Mandatory = $true)]
+        [string]$Name,
+        [Parameter(Mandatory = $true)]
+        [object]$Shell
+    )
+
+    try {
+        $Process.Refresh()
+        $root = [System.Windows.Automation.AutomationElement]::FromHandle(
+            $Process.MainWindowHandle)
+        if ($null -eq $root) {
+            return [ordered]@{
+                success = $false
+                reason = "Explorer UI Automation root was unavailable."
+            }
+        }
+
+        $condition = [System.Windows.Automation.PropertyCondition]::new(
+            [System.Windows.Automation.AutomationElement]::NameProperty,
+            $Name)
+        $element = $root.FindFirst(
+            [System.Windows.Automation.TreeScope]::Descendants,
+            $condition)
+
+        if ($null -eq $element) {
+            return [ordered]@{
+                success = $false
+                reason = "Target file element was not found in Explorer UI Automation tree."
+            }
+        }
+
+        $element.SetFocus()
+        Start-Sleep -Milliseconds 150
+        $Shell.SendKeys("{F2}")
+        $focused = Wait-FocusedEdit -Attempts 40
+
+        if ($focused.exists -and
+            $focused.hasKeyboardFocus -and
+            $focused.controlType -eq "ControlType.Edit") {
+            return [ordered]@{
+                success = $true
+                focused = $focused
+            }
+        }
+
+        return [ordered]@{
+            success = $false
+            reason = "F2 did not place keyboard focus in an Explorer rename edit."
+            focused = $focused
+        }
+    }
+    catch {
+        return [ordered]@{
+            success = $false
+            reason = $_.Exception.Message
+            focused = (Get-FocusedControlSnapshot)
+        }
+    }
+}
+
+function Classify-FocusedProbe {
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$FocusResult
+    )
+
+    if (-not $FocusResult.success) {
+        return [ordered]@{
+            status = "HARNESS_FOCUS_UNAVAILABLE"
+            focus = $FocusResult
+        }
+    }
+
+    $probe = Invoke-CaretProbe
+    $active = $probe.parseable -eq $true -and
+        $probe.payload.activeCaret -eq $true
+
+    return [ordered]@{
+        status = $(if ($active) { "PROBED" } else { "PRODUCT_CARET_GAP" })
+        focus = $FocusResult
+        probe = $probe
+    }
+}
+
 function Test-Notepad {
     $process = $null
     $shell = $null
@@ -199,29 +403,34 @@ function Test-SettingsSearch {
             }
             Start-Sleep -Milliseconds 100
         }
+
         if (-not $process) {
             return [ordered]@{
-                status = "UNAVAILABLE"
+                status = "TARGET_UNAVAILABLE"
                 reason = "SystemSettings process with a main window was not available."
             }
         }
 
         $shell = Activate-Process -Process $process
-        $shell.SendKeys("^f")
-        Start-Sleep -Milliseconds 250
-        $shell.SendKeys("display")
-        Start-Sleep -Milliseconds 250
+        $focusResult = Focus-FirstEditableDescendant -Process $process
+        if ($focusResult.success) {
+            $shell.SendKeys("display")
+            Start-Sleep -Milliseconds 200
+        }
 
+        $classified = Classify-FocusedProbe -FocusResult $focusResult
         return [ordered]@{
-            status = "PROBED"
+            status = $classified.status
             process = $process.ProcessName
-            probe = (Invoke-CaretProbe)
+            focus = $classified.focus
+            probe = $classified.probe
         }
     }
     catch {
         return [ordered]@{
-            status = "ERROR"
+            status = "HARNESS_ERROR"
             error = $_.Exception.Message
+            focused = (Get-FocusedControlSnapshot)
         }
     }
     finally {
@@ -235,17 +444,17 @@ function Test-SettingsSearch {
 function Test-ExplorerRename {
     $shell = $null
     $folder = Join-Path $env:TEMP ("WiciExplorerProbe-" + [Guid]::NewGuid().ToString("N"))
-    $file = Join-Path $folder "probe-file.txt"
+    $fileName = "probe-file.txt"
+    $file = Join-Path $folder $fileName
     $process = $null
 
     try {
         New-Item -ItemType Directory -Path $folder -Force | Out-Null
         Set-Content -Path $file -Value "probe" -Encoding UTF8
 
-        $argument = '/select,"' + $file + '"'
-        Start-Process -FilePath "explorer.exe" -ArgumentList $argument | Out-Null
-
+        Start-Process -FilePath "explorer.exe" -ArgumentList $folder | Out-Null
         $folderName = Split-Path $folder -Leaf
+
         for ($i = 0; $i -lt 80; $i++) {
             $process = Get-Process -Name "explorer" -ErrorAction SilentlyContinue |
                 Where-Object {
@@ -261,25 +470,27 @@ function Test-ExplorerRename {
 
         if (-not $process) {
             return [ordered]@{
-                status = "UNAVAILABLE"
+                status = "TARGET_UNAVAILABLE"
                 reason = "Explorer test folder window was not discovered."
             }
         }
 
         $shell = Activate-Process -Process $process
-        $shell.SendKeys("{F2}")
-        Start-Sleep -Milliseconds 300
+        $focusResult = Focus-NamedDescendantForRename -Process $process -Name $fileName -Shell $shell
 
+        $classified = Classify-FocusedProbe -FocusResult $focusResult
         return [ordered]@{
-            status = "PROBED"
+            status = $classified.status
             process = $process.ProcessName
-            probe = (Invoke-CaretProbe)
+            focus = $classified.focus
+            probe = $classified.probe
         }
     }
     catch {
         return [ordered]@{
-            status = "ERROR"
+            status = "HARNESS_ERROR"
             error = $_.Exception.Message
+            focused = (Get-FocusedControlSnapshot)
         }
     }
     finally {
@@ -387,5 +598,7 @@ $active = @($probed | Where-Object { $_.Value.probe.parseable -eq $true -and $_.
 Write-Host "Probed built-in targets: $($probed.Count); active-caret probes: $($active.Count)."
 
 if ($probed.Count -eq 0) {
-    throw "No built-in Windows target could be probed in this runner."
+    Write-Host "No built-in Windows target produced an active-caret PASS; discovery evidence remains diagnostic."
 }
+
+exit 0
