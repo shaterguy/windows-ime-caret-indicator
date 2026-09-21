@@ -15,8 +15,8 @@ public static class WiciImeHarness
     private const uint KLF_ACTIVATE = 0x00000001;
     private const uint WM_INPUTLANGCHANGEREQUEST = 0x0050;
     private const uint WM_IME_CONTROL = 0x0283;
-    private const UIntPtr IMC_SETCONVERSIONMODE = (UIntPtr)0x0002;
-    private const UIntPtr IMC_SETOPENSTATUS = (UIntPtr)0x0006;
+    private static readonly UIntPtr IMC_SETCONVERSIONMODE = (UIntPtr)0x0002;
+    private static readonly UIntPtr IMC_SETOPENSTATUS = (UIntPtr)0x0006;
     private const uint SMTO_ABORTIFHUNG = 0x0002;
     private const uint INPUT_KEYBOARD = 1;
     private const uint KEYEVENTF_KEYUP = 0x0002;
