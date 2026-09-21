@@ -64,7 +64,18 @@ jobs:
             Set-WinUserLanguageList $languages -Force
           }
 
+          $languages = Get-WinUserLanguageList
+          $korean = $languages | Where-Object { $_.LanguageTag -in @("ko-KR", "ko") } | Select-Object -First 1
+          $koreanTip = $korean.InputMethodTips | Where-Object { $_ -like "0412:*" } | Select-Object -First 1
+          if (-not $koreanTip) {
+            throw "Korean Microsoft IME input TIP was not registered."
+          }
+
+          Set-WinDefaultInputMethodOverride -InputTip $koreanTip
+          Start-Process -FilePath "$env:WINDIR\System32\ctfmon.exe" -ErrorAction SilentlyContinue
+
           Get-WinUserLanguageList | Format-List LanguageTag, InputMethodTips
+          Write-Host "Default Korean input TIP: $koreanTip"
 
       - name: Korean IME actual-input smoke test
         id: korean_ime_smoke

@@ -20,6 +20,7 @@ public static class WiciImeHarness
     private const uint SMTO_ABORTIFHUNG = 0x0002;
     private const uint INPUT_KEYBOARD = 1;
     private const uint KEYEVENTF_KEYUP = 0x0002;
+    private const uint KEYEVENTF_SCANCODE = 0x0008;
 
     [StructLayout(LayoutKind.Sequential)]
     private struct INPUT
@@ -191,6 +192,12 @@ public static class WiciImeHarness
         SendKeyCore(vk, true);
     }
 
+    public static void ScanKey(ushort scanCode)
+    {
+        SendScanKeyCore(scanCode, false);
+        SendScanKeyCore(scanCode, true);
+    }
+
     private static void SendKeyCore(ushort vk, bool keyUp)
     {
         var input = new INPUT
@@ -215,6 +222,34 @@ public static class WiciImeHarness
         {
             throw new InvalidOperationException(
                 $"SendInput failed. Win32={Marshal.GetLastWin32Error()}, cbSize={inputSize}.");
+        }
+    }
+
+    private static void SendScanKeyCore(ushort scanCode, bool keyUp)
+    {
+        var input = new INPUT
+        {
+            type = INPUT_KEYBOARD,
+            U = new InputUnion
+            {
+                ki = new KEYBDINPUT
+                {
+                    wVk = 0,
+                    wScan = scanCode,
+                    dwFlags = KEYEVENTF_SCANCODE |
+                              (keyUp ? KEYEVENTF_KEYUP : 0),
+                    time = 0,
+                    dwExtraInfo = UIntPtr.Zero
+                }
+            }
+        };
+
+        var inputs = new[] { input };
+        int inputSize = Marshal.SizeOf<INPUT>();
+        if (SendInput(1, inputs, inputSize) != 1)
+        {
+            throw new InvalidOperationException(
+                $"SendInput(scan) failed. Win32={Marshal.GetLastWin32Error()}, cbSize={inputSize}.");
         }
     }
 
@@ -288,6 +323,15 @@ function Type-Keys {
     }
 }
 
+function Type-ScanCodes {
+    param([ushort[]]$ScanCodes)
+
+    foreach ($scanCode in $ScanCodes) {
+        [WiciImeHarness]::ScanKey($scanCode)
+        Start-Sleep -Milliseconds 20
+    }
+}
+
 if (-not (Test-Path $ExecutablePath)) {
     throw "Executable was not found at '$ExecutablePath'."
 }
@@ -346,12 +390,19 @@ try {
 
     Focus-TestHost -Window $window
     $beforeKoreanText = [WiciImeHarness]::GetText($edit)
-    Type-Keys -VirtualKeys @(0x47, 0x4B, 0x53) # g k s -> 한 on 2-set Korean layout
+    Type-ScanCodes -ScanCodes @(0x22, 0x25, 0x1F) # physical G K S -> 한 on 2-set Korean layout
     [WiciImeHarness]::Key(0x20)                 # commit composition with space
 
-    Wait-Until -Label "actual Hangul text" -Condition {
-        $text = [WiciImeHarness]::GetText($edit)
-        $text -ne $beforeKoreanText -and $text.Contains("한")
+    try {
+        Wait-Until -Label "actual Hangul text" -Condition {
+            $text = [WiciImeHarness]::GetText($edit)
+            $text -ne $beforeKoreanText -and $text.Contains("한")
+        }
+    }
+    catch {
+        $failedText = [WiciImeHarness]::GetText($edit)
+        $failedProbe = Invoke-Probe
+        throw "Actual Hangul input failed. Text='$failedText'. Probe=$($failedProbe | ConvertTo-Json -Compress -Depth 8)"
     }
 
     $koreanText = [WiciImeHarness]::GetText($edit)
@@ -369,12 +420,19 @@ try {
 
     Focus-TestHost -Window $window
     $beforeEnglishText = [WiciImeHarness]::GetText($edit)
-    Type-Keys -VirtualKeys @(0x41, 0x42, 0x43)
+    Type-ScanCodes -ScanCodes @(0x1E, 0x30, 0x2E) # physical A B C
     [WiciImeHarness]::Key(0x20)
 
-    Wait-Until -Label "actual English text" -Condition {
-        $text = [WiciImeHarness]::GetText($edit)
-        $text -ne $beforeEnglishText -and $text.Contains("abc")
+    try {
+        Wait-Until -Label "actual English text" -Condition {
+            $text = [WiciImeHarness]::GetText($edit)
+            $text -ne $beforeEnglishText -and $text.Contains("abc")
+        }
+    }
+    catch {
+        $failedText = [WiciImeHarness]::GetText($edit)
+        $failedProbe = Invoke-Probe
+        throw "Actual English input failed. Text='$failedText'. Probe=$($failedProbe | ConvertTo-Json -Compress -Depth 8)"
     }
 
     $englishText = [WiciImeHarness]::GetText($edit)

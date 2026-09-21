@@ -78,7 +78,34 @@ internal static class DiagnosticRunner
 
 internal static class NativeTestHost
 {
+    private const uint TfProfileTypeInputProcessor = 0x0001;
+    private const uint TfIppmfForProcess = 0x10000000;
+    private const uint TfIppmfEnableProfile = 0x00000001;
+    private const uint TfIppmfDontCareCurrentInputLanguage = 0x00000004;
+
+    private static readonly Guid TfInputProcessorProfilesClsid =
+        new("33C53A50-F456-4884-B049-85FD643ECFED");
+    private static readonly Guid KoreanImeClsid =
+        new("A028AE76-01B1-46C2-99C4-ACD9858AE02F");
+    private static readonly Guid KoreanImeProfileGuid =
+        new("B5FE1F02-D5F2-4445-9C03-C568F23C99A1");
+
     private static readonly Native.WindowProc WindowProc = WndProc;
+
+    [ComImport]
+    [Guid("71C6E74C-0F28-11D8-A82A-00065B84435C")]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface ITfInputProcessorProfileMgr
+    {
+        [PreserveSig]
+        int ActivateProfile(
+            uint profileType,
+            ushort languageId,
+            ref Guid clsid,
+            ref Guid profileGuid,
+            nint keyboardLayout,
+            uint flags);
+    }
 
     internal static int Run(bool activateKorean = false)
     {
@@ -167,6 +194,8 @@ internal static class NativeTestHost
             throw new InvalidOperationException(
                 $"Test host did not activate ko-KR. LanguageId=0x{languageId:X4}");
 
+        ActivateKoreanTsfProfile();
+
         var himc = Native.ImmGetContext(edit);
         if (himc == nint.Zero)
             throw new InvalidOperationException(
@@ -190,6 +219,52 @@ internal static class NativeTestHost
         finally
         {
             _ = Native.ImmReleaseContext(edit, himc);
+        }
+    }
+
+    private static void ActivateKoreanTsfProfile()
+    {
+        var type = Type.GetTypeFromCLSID(
+            TfInputProcessorProfilesClsid,
+            throwOnError: true);
+
+        var instance = Activator.CreateInstance(type!)
+            ?? throw new InvalidOperationException(
+                "Unable to create TSF input processor profile manager.");
+
+        try
+        {
+            if (instance is not ITfInputProcessorProfileMgr profileManager)
+            {
+                throw new InvalidOperationException(
+                    "TSF input processor profile manager interface is unavailable.");
+            }
+
+            var clsid = KoreanImeClsid;
+            var profileGuid = KoreanImeProfileGuid;
+            var flags =
+                TfIppmfForProcess |
+                TfIppmfEnableProfile |
+                TfIppmfDontCareCurrentInputLanguage;
+
+            var hr = profileManager.ActivateProfile(
+                TfProfileTypeInputProcessor,
+                ImeLogic.KoreanLanguageId,
+                ref clsid,
+                ref profileGuid,
+                nint.Zero,
+                flags);
+
+            if (hr != 0)
+            {
+                throw new InvalidOperationException(
+                    $"Korean Microsoft IME TSF profile activation failed: HRESULT=0x{hr:X8}.");
+            }
+        }
+        finally
+        {
+            if (Marshal.IsComObject(instance))
+                _ = Marshal.FinalReleaseComObject(instance);
         }
     }
 
