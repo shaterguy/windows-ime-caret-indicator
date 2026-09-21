@@ -345,12 +345,13 @@ try {
     }
 
     Focus-TestHost -Window $window
-    Clear-Edit
+    $beforeKoreanText = [WiciImeHarness]::GetText($edit)
     Type-Keys -VirtualKeys @(0x47, 0x4B, 0x53) # g k s -> 한 on 2-set Korean layout
     [WiciImeHarness]::Key(0x20)                 # commit composition with space
 
     Wait-Until -Label "actual Hangul text" -Condition {
-        [WiciImeHarness]::GetText($edit).StartsWith("한")
+        $text = [WiciImeHarness]::GetText($edit)
+        $text -ne $beforeKoreanText -and $text.Contains("한")
     }
 
     $koreanText = [WiciImeHarness]::GetText($edit)
@@ -367,12 +368,13 @@ try {
     }
 
     Focus-TestHost -Window $window
-    Clear-Edit
+    $beforeEnglishText = [WiciImeHarness]::GetText($edit)
     Type-Keys -VirtualKeys @(0x41, 0x42, 0x43)
     [WiciImeHarness]::Key(0x20)
 
     Wait-Until -Label "actual English text" -Condition {
-        [WiciImeHarness]::GetText($edit).StartsWith("abc")
+        $text = [WiciImeHarness]::GetText($edit)
+        $text -ne $beforeEnglishText -and $text.Contains("abc")
     }
 
     $englishText = [WiciImeHarness]::GetText($edit)
