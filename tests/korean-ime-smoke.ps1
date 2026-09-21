@@ -281,7 +281,7 @@ try {
             $window,
             [IntPtr]::Zero,
             "EDIT",
-            $null)
+            "Type here and move the caret")
         $script:edit -ne [IntPtr]::Zero
     }
 
