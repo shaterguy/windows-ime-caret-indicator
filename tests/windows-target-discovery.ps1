@@ -291,22 +291,65 @@ function Focus-NamedDescendantForRename {
             }
         }
 
-        $condition = [System.Windows.Automation.PropertyCondition]::new(
-            [System.Windows.Automation.AutomationElement]::NameProperty,
-            $Name)
-        $element = $root.FindFirst(
+        $baseName = [System.IO.Path]::GetFileNameWithoutExtension($Name)
+        $all = $root.FindAll(
             [System.Windows.Automation.TreeScope]::Descendants,
-            $condition)
+            [System.Windows.Automation.Condition]::TrueCondition)
 
-        if ($null -eq $element) {
-            return [ordered]@{
-                success = $false
-                reason = "Target file element was not found in Explorer UI Automation tree."
+        $target = $null
+        foreach ($element in $all) {
+            try {
+                $elementName = $element.Current.Name
+                if ($elementName -eq $Name -or
+                    $elementName -eq $baseName -or
+                    $elementName -like "$baseName*") {
+                    $target = $element
+                    break
+                }
+            }
+            catch {
             }
         }
 
-        $element.SetFocus()
-        Start-Sleep -Milliseconds 150
+        if ($null -ne $target) {
+            try {
+                $target.SetFocus()
+                Start-Sleep -Milliseconds 150
+            }
+            catch {
+            }
+        }
+        else {
+            $itemsCondition = [System.Windows.Automation.PropertyCondition]::new(
+                [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+                "ItemsView")
+            $itemsView = $root.FindFirst(
+                [System.Windows.Automation.TreeScope]::Descendants,
+                $itemsCondition)
+
+            if ($null -eq $itemsView) {
+                return [ordered]@{
+                    success = $false
+                    reason = "Neither target file nor Explorer ItemsView was found in UI Automation tree."
+                    focused = (Get-FocusedControlSnapshot)
+                }
+            }
+
+            try {
+                $itemsView.SetFocus()
+                Start-Sleep -Milliseconds 150
+                $Shell.SendKeys("^a")
+                Start-Sleep -Milliseconds 150
+            }
+            catch {
+                return [ordered]@{
+                    success = $false
+                    reason = "Explorer ItemsView could not be focused for keyboard selection."
+                    focused = (Get-FocusedControlSnapshot)
+                }
+            }
+        }
+
         $Shell.SendKeys("{F2}")
         $focused = Wait-FocusedEdit -Attempts 40
 
