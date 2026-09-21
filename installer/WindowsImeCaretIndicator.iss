@@ -1,6 +1,6 @@
 #define MyAppName "Windows IME Caret Indicator"
 #ifndef MyAppVersion
-  #define MyAppVersion "0.1.0-dev1"
+  #define MyAppVersion "0.1.0"
 #endif
 #define MyAppExeName "WindowsImeCaretIndicator.exe"
 #define MyAppPublisher "SHatergUY"

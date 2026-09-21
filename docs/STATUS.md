@@ -1,1 +1,1 @@
-Development work in progress. TextPattern2-first caret provider has been added; Windows build and runtime verification are pending.
+Release candidate 0.1.0. Functional runtime candidate is unchanged from the validated work/runtime-validation lineage; version/package metadata is promoted to the first stable release and must pass the Windows release build/install validation before publishing.

@@ -98,7 +98,7 @@ jobs:
       - name: Build installer
         shell: pwsh
         run: |
-          ISCC.exe /DMyAppVersion=0.1.0-dev1 installer/WindowsImeCaretIndicator.iss
+          ISCC.exe /DMyAppVersion=0.1.0 installer/WindowsImeCaretIndicator.iss
           if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
           }
