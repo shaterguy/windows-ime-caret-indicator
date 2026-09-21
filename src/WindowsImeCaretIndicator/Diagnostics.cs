@@ -136,10 +136,10 @@ internal static class NativeTestHost
             throw new InvalidOperationException(
                 $"CreateWindowExW(EDIT) failed: {Marshal.GetLastWin32Error()}");
 
+        _ = Native.SetFocus(edit);
+
         if (activateKorean)
             ActivateKoreanInput(edit);
-
-        _ = Native.SetFocus(edit);
 
         while (Native.GetMessageW(out var message, nint.Zero, 0, 0) > 0)
         {
