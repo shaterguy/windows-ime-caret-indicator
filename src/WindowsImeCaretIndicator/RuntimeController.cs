@@ -12,6 +12,8 @@ internal sealed class AppSettings
 
     public bool StartWithWindows { get; set; } = true;
 
+    public bool Paused { get; set; }
+
     private static string SettingsDirectory =>
         Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -107,11 +109,15 @@ internal sealed class IndicatorApplicationContext : ApplicationContext
     internal IndicatorApplicationContext()
     {
         _settings = AppSettings.Load();
+        _paused = _settings.Paused;
 
-        _pauseItem = new ToolStripMenuItem("표시 일시 정지", null, (_, _) => SetPaused(true));
+        _pauseItem = new ToolStripMenuItem("표시 일시 정지", null, (_, _) => SetPaused(true))
+        {
+            Visible = !_paused
+        };
         _resumeItem = new ToolStripMenuItem("표시 재개", null, (_, _) => SetPaused(false))
         {
-            Visible = false
+            Visible = _paused
         };
         _startupItem = new ToolStripMenuItem(
             "Windows 시작 시 자동 실행",
@@ -230,6 +236,8 @@ internal sealed class IndicatorApplicationContext : ApplicationContext
     private void SetPaused(bool paused)
     {
         _paused = paused;
+        _settings.Paused = paused;
+        _settings.Save();
         _pauseItem.Visible = !paused;
         _resumeItem.Visible = paused;
 
