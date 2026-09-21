@@ -64,7 +64,6 @@ jobs:
             Set-WinUserLanguageList $languages -Force
           }
 
-          Set-WinDefaultInputMethodOverride -InputTip "0412:{03B5835F-F03C-411B-9CE2-AA23E1171E36}{A028AE76-01B1-46C2-99C4-ACD9858AE02F}"
           Get-WinUserLanguageList | Format-List LanguageTag, InputMethodTips
 
       - name: Korean IME actual-input smoke test

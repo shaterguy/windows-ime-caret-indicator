@@ -263,7 +263,7 @@ if (-not (Test-Path $ExecutablePath)) {
     throw "Executable was not found at '$ExecutablePath'."
 }
 
-$hostProcess = Start-Process -FilePath $ExecutablePath -ArgumentList "--test-host" -PassThru
+$hostProcess = Start-Process -FilePath $ExecutablePath -ArgumentList "--test-host-korean" -PassThru
 $script:edit = [IntPtr]::Zero
 
 try {
@@ -285,23 +285,10 @@ try {
         $script:edit -ne [IntPtr]::Zero
     }
 
-    $koreanLayout = [WiciImeHarness]::LoadKoreanLayout()
-    if ($koreanLayout -eq [IntPtr]::Zero) {
-        throw "LoadKeyboardLayoutW(00000412) failed. Korean input profile is unavailable in this Windows session."
-    }
-
     Focus-TestHost -Window $window
-
-    if (-not [WiciImeHarness]::RequestKoreanLayout($window, $koreanLayout)) {
-        throw "WM_INPUTLANGCHANGEREQUEST failed for the native test host."
-    }
 
     Wait-Until -Label "ko-KR input layout on test-host thread" -Condition {
         [WiciImeHarness]::GetLanguageId($edit) -eq 0x0412
-    }
-
-    if (-not [WiciImeHarness]::SetImeMode($edit, $true, 0x0001)) {
-        throw "Unable to set Microsoft Korean IME to native/open mode."
     }
 
     Start-Sleep -Milliseconds 150

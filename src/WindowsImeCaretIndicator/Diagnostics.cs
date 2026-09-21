@@ -80,7 +80,7 @@ internal static class NativeTestHost
 {
     private static readonly Native.WindowProc WindowProc = WndProc;
 
-    internal static int Run()
+    internal static int Run(bool activateKorean = false)
     {
         var module = Native.GetModuleHandleW(null);
         var windowClass = new Native.WindowClass
@@ -136,6 +136,9 @@ internal static class NativeTestHost
             throw new InvalidOperationException(
                 $"CreateWindowExW(EDIT) failed: {Marshal.GetLastWin32Error()}");
 
+        if (activateKorean)
+            ActivateKoreanInput(edit);
+
         _ = Native.SetFocus(edit);
 
         while (Native.GetMessageW(out var message, nint.Zero, 0, 0) > 0)
@@ -145,6 +148,49 @@ internal static class NativeTestHost
         }
 
         return 0;
+    }
+
+    private static void ActivateKoreanInput(nint edit)
+    {
+        var hkl = Native.LoadKeyboardLayoutW("00000412", Native.KlfActivate);
+        if (hkl == nint.Zero)
+            throw new InvalidOperationException(
+                $"LoadKeyboardLayoutW(ko-KR) failed: {Marshal.GetLastWin32Error()}");
+
+        if (Native.ActivateKeyboardLayout(hkl, 0) == nint.Zero)
+            throw new InvalidOperationException(
+                $"ActivateKeyboardLayout(ko-KR) failed: {Marshal.GetLastWin32Error()}");
+
+        var languageId = unchecked(
+            (ushort)((long)Native.GetKeyboardLayout(0) & 0xffff));
+        if (languageId != ImeLogic.KoreanLanguageId)
+            throw new InvalidOperationException(
+                $"Test host did not activate ko-KR. LanguageId=0x{languageId:X4}");
+
+        var himc = Native.ImmGetContext(edit);
+        if (himc == nint.Zero)
+            throw new InvalidOperationException(
+                "Native EDIT has no IMM input context.");
+
+        try
+        {
+            if (!Native.ImmSetOpenStatus(himc, true))
+                throw new InvalidOperationException(
+                    "ImmSetOpenStatus(true) failed.");
+
+            if (!Native.ImmSetConversionStatus(
+                    himc,
+                    ImeLogic.NativeMode,
+                    0))
+            {
+                throw new InvalidOperationException(
+                    "ImmSetConversionStatus(native) failed.");
+            }
+        }
+        finally
+        {
+            _ = Native.ImmReleaseContext(edit, himc);
+        }
     }
 
     private static nint WndProc(nint hwnd, uint message, nuint wParam, nint lParam)

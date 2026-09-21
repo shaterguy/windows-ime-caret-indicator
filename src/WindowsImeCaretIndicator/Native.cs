@@ -29,6 +29,7 @@ internal static class Native
     internal const uint EsAutoHScroll = 0x0080;
     internal const int CwUseDefault = unchecked((int)0x80000000);
     internal const uint WmDestroy = 0x0002;
+    internal const uint KlfActivate = 0x00000001;
 
     [StructLayout(LayoutKind.Sequential)]
     internal struct Point
@@ -130,6 +131,12 @@ internal static class Native
     [DllImport("user32.dll")]
     internal static extern nint GetKeyboardLayout(uint idThread);
 
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    internal static extern nint LoadKeyboardLayoutW(string pwszKLID, uint flags);
+
+    [DllImport("user32.dll")]
+    internal static extern nint ActivateKeyboardLayout(nint hkl, uint flags);
+
     [DllImport("user32.dll")]
     internal static extern uint GetDpiForWindow(nint hwnd);
 
@@ -147,6 +154,14 @@ internal static class Native
     [DllImport("imm32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool ImmGetConversionStatus(nint hImc, out uint conversion, out uint sentence);
+
+    [DllImport("imm32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool ImmSetOpenStatus(nint hImc, [MarshalAs(UnmanagedType.Bool)] bool open);
+
+    [DllImport("imm32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool ImmSetConversionStatus(nint hImc, uint conversion, uint sentence);
 
     [DllImport("imm32.dll")]
     internal static extern nint ImmGetDefaultIMEWnd(nint hWnd);

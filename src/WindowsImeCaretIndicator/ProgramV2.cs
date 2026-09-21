@@ -24,6 +24,13 @@ internal static class ProgramV2
         }
 
         if (args.Contains(
+                "--test-host-korean",
+                StringComparer.OrdinalIgnoreCase))
+        {
+            return NativeTestHost.Run(activateKorean: true);
+        }
+
+        if (args.Contains(
                 "--test-host",
                 StringComparer.OrdinalIgnoreCase))
         {
