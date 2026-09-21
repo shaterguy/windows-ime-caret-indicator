@@ -95,7 +95,7 @@ function Test-BrowserCaret {
         Wait-Driver -Port $Port
 
         $alwaysMatch = @{
-            browserName = $Name.ToLowerInvariant()
+            browserName = $Name
             $OptionsKey = @{
                 args = @(
                     "--force-renderer-accessibility",
