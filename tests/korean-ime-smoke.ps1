@@ -21,6 +21,8 @@ public static class WiciImeHarness
     private const uint WM_WICI_QUERY_IME_STATE = 0x8001;
     private const uint WM_WICI_INITIALIZE_KOREAN_IME = 0x8002;
     private const uint WM_WICI_INITIALIZE_ENGLISH_INPUT = 0x8003;
+    private const uint WM_WICI_QUERY_INPUT_DIAGNOSTIC = 0x8004;
+    private const uint WM_WICI_RESET_INPUT_DIAGNOSTICS = 0x8005;
     private const uint INPUT_KEYBOARD = 1;
     private const uint KEYEVENTF_KEYUP = 0x0002;
     private const uint KEYEVENTF_SCANCODE = 0x0008;
@@ -287,6 +289,48 @@ public static class WiciImeHarness
         if (transport == IntPtr.Zero || result == IntPtr.Zero)
             throw new InvalidOperationException("Unable to query target-process IME state.");
         return result.ToInt64();
+    }
+
+    private static long QueryInputDiagnostic(IntPtr topWindow, uint selector)
+    {
+        IntPtr result;
+        IntPtr transport = SendMessageTimeoutW(
+            topWindow,
+            WM_WICI_QUERY_INPUT_DIAGNOSTIC,
+            (UIntPtr)selector,
+            IntPtr.Zero,
+            SMTO_ABORTIFHUNG,
+            1000,
+            out result);
+        if (transport == IntPtr.Zero)
+            throw new InvalidOperationException(
+                "Unable to query target-process input diagnostics. Selector=" + selector + ".");
+        return result.ToInt64();
+    }
+
+    public static bool ResetInputDiagnostics(IntPtr topWindow)
+    {
+        IntPtr result;
+        IntPtr transport = SendMessageTimeoutW(
+            topWindow,
+            WM_WICI_RESET_INPUT_DIAGNOSTICS,
+            UIntPtr.Zero,
+            IntPtr.Zero,
+            SMTO_ABORTIFHUNG,
+            1000,
+            out result);
+        return transport != IntPtr.Zero && result != IntPtr.Zero;
+    }
+
+    public static string GetInputDiagnostics(IntPtr topWindow)
+    {
+        return "queueKeyDown=" + QueryInputDiagnostic(topWindow, 1) +
+               ", queueKeyUp=" + QueryInputDiagnostic(topWindow, 2) +
+               ", queueChar=" + QueryInputDiagnostic(topWindow, 3) +
+               ", translatedKeyDown=" + QueryInputDiagnostic(topWindow, 4) +
+               ", dispatchedKeyDown=" + QueryInputDiagnostic(topWindow, 5) +
+               ", dispatchedKeyUp=" + QueryInputDiagnostic(topWindow, 6) +
+               ", dispatchedChar=" + QueryInputDiagnostic(topWindow, 7);
     }
 
     public static bool IsInputRoutedToEdit(IntPtr topWindow, IntPtr edit)
@@ -758,17 +802,26 @@ try {
 
     Clear-Edit
     Focus-TestHost -Window $window
+    if (-not [WiciImeHarness]::ResetInputDiagnostics($window)) {
+        throw "Unable to reset target-process input diagnostics before scan-code SendInput."
+    }
     Type-ScanCodes -ScanCodes @(0x1E, 0x30, 0x2E)
     if (Test-TextContains -Needle "abc") {
         $inputPath = "ScanCode"
     }
     else {
         $scanFailureText = [WiciImeHarness]::GetText($edit)
+        $scanDiagnostics = [WiciImeHarness]::GetInputDiagnostics($window)
+
         Clear-Edit
         Focus-TestHost -Window $window
+        if (-not [WiciImeHarness]::ResetInputDiagnostics($window)) {
+            throw "Unable to reset target-process input diagnostics before virtual-key SendInput."
+        }
         Type-Keys -VirtualKeys @(0x41, 0x42, 0x43)
         if (-not (Test-TextContains -Needle "abc")) {
             $virtualFailureText = [WiciImeHarness]::GetText($edit)
+            $virtualDiagnostics = [WiciImeHarness]::GetInputDiagnostics($window)
             $routing = [WiciImeHarness]::GetInputRoutingEvidence(
                 $window,
                 $edit)
@@ -777,18 +830,23 @@ try {
 
             Clear-Edit
             Focus-TestHost -Window $window
+            if (-not [WiciImeHarness]::ResetInputDiagnostics($window)) {
+                throw "Unable to reset target-process input diagnostics before diagnostic PostMessage input."
+            }
             [WiciImeHarness]::PostKeyMessage($edit, 0x41)
             [WiciImeHarness]::PostKeyMessage($edit, 0x42)
             [WiciImeHarness]::PostKeyMessage($edit, 0x43)
             $postMessageDelivered =
                 Test-TextContains -Needle "abc"
             $postMessageText = [WiciImeHarness]::GetText($edit)
+            $postMessageDiagnostics =
+                [WiciImeHarness]::GetInputDiagnostics($window)
 
             if ($postMessageDelivered) {
-                throw "Keyboard SendInput delivery failed in English baseline for both scan-code and virtual-key paths, while the diagnostic window-scoped PostMessage path produced 'abc'. The Win32 target/message-pump path works, but OS-wide SendInput delivery is unavailable in this execution environment. PostMessage is diagnostic only and is not actual-input proof. ScanText='$scanFailureText'. VirtualText='$virtualFailureText'. PostMessageText='$postMessageText'. Routing=$routing. ExecutionEnvironment=$executionEnvironment"
+                throw "Keyboard SendInput delivery failed in English baseline for both scan-code and virtual-key paths, while the diagnostic window-scoped PostMessage path produced 'abc'. PostMessage remains diagnostic only and is not actual-input proof. Target-side counters distinguish queue delivery, TranslateMessage character generation, and dispatch to the EDIT HWND. ScanText='$scanFailureText'. ScanDiagnostics=$scanDiagnostics. VirtualText='$virtualFailureText'. VirtualDiagnostics=$virtualDiagnostics. PostMessageText='$postMessageText'. PostMessageDiagnostics=$postMessageDiagnostics. Routing=$routing. ExecutionEnvironment=$executionEnvironment"
             }
 
-            throw "Keyboard SendInput delivery failed in English baseline for both scan-code and virtual-key paths, and the diagnostic window-scoped PostMessage path also failed to produce 'abc'. The failure remains at or before the target message-processing path and needs deeper target-side instrumentation. ScanText='$scanFailureText'. VirtualText='$virtualFailureText'. PostMessageText='$postMessageText'. Routing=$routing. ExecutionEnvironment=$executionEnvironment"
+            throw "Keyboard SendInput delivery failed in English baseline for both scan-code and virtual-key paths, and the diagnostic window-scoped PostMessage path also failed to produce 'abc'. Target-side counters now distinguish queue delivery, TranslateMessage character generation, and dispatch to the EDIT HWND. ScanText='$scanFailureText'. ScanDiagnostics=$scanDiagnostics. VirtualText='$virtualFailureText'. VirtualDiagnostics=$virtualDiagnostics. PostMessageText='$postMessageText'. PostMessageDiagnostics=$postMessageDiagnostics. Routing=$routing. ExecutionEnvironment=$executionEnvironment"
         }
 
         $inputPath = "VirtualKey"

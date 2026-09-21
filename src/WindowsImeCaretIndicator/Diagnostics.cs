@@ -94,6 +94,17 @@ internal static class NativeTestHost
     private const uint WmWiciQueryImeState = 0x8001;
     private const uint WmWiciInitializeKoreanIme = 0x8002;
     private const uint WmWiciInitializeEnglishInput = 0x8003;
+    private const uint WmWiciQueryInputDiagnostic = 0x8004;
+    private const uint WmWiciResetInputDiagnostics = 0x8005;
+    private const uint WmKeyUp = 0x0101;
+    private const uint WmChar = 0x0102;
+    private static int _queueKeyDown;
+    private static int _queueKeyUp;
+    private static int _queueChar;
+    private static int _translatedKeyDown;
+    private static int _dispatchedKeyDown;
+    private static int _dispatchedKeyUp;
+    private static int _dispatchedChar;
     private static nint _editWindow;
 
     [ComImport]
@@ -178,11 +189,80 @@ internal static class NativeTestHost
 
         while (Native.GetMessageW(out var message, nint.Zero, 0, 0) > 0)
         {
-            _ = Native.TranslateMessage(ref message);
+            var editMessage = message.hwnd == _editWindow;
+            if (editMessage)
+            {
+                switch (message.message)
+                {
+                    case Native.WmKeyDown:
+                    case Native.WmSysKeyDown:
+                        _queueKeyDown++;
+                        break;
+                    case WmKeyUp:
+                        _queueKeyUp++;
+                        break;
+                    case WmChar:
+                        _queueChar++;
+                        break;
+                }
+            }
+
+            var translated = Native.TranslateMessage(ref message);
+            if (editMessage &&
+                (message.message == Native.WmKeyDown ||
+                 message.message == Native.WmSysKeyDown) &&
+                translated)
+            {
+                _translatedKeyDown++;
+            }
+
             _ = Native.DispatchMessageW(ref message);
+
+            if (editMessage)
+            {
+                switch (message.message)
+                {
+                    case Native.WmKeyDown:
+                    case Native.WmSysKeyDown:
+                        _dispatchedKeyDown++;
+                        break;
+                    case WmKeyUp:
+                        _dispatchedKeyUp++;
+                        break;
+                    case WmChar:
+                        _dispatchedChar++;
+                        break;
+                }
+            }
         }
 
         return 0;
+    }
+
+    private static void ResetInputDiagnostics()
+    {
+        _queueKeyDown = 0;
+        _queueKeyUp = 0;
+        _queueChar = 0;
+        _translatedKeyDown = 0;
+        _dispatchedKeyDown = 0;
+        _dispatchedKeyUp = 0;
+        _dispatchedChar = 0;
+    }
+
+    private static nint QueryInputDiagnostic(nuint selector)
+    {
+        return (uint)selector switch
+        {
+            1 => (nint)_queueKeyDown,
+            2 => (nint)_queueKeyUp,
+            3 => (nint)_queueChar,
+            4 => (nint)_translatedKeyDown,
+            5 => (nint)_dispatchedKeyDown,
+            6 => (nint)_dispatchedKeyUp,
+            7 => (nint)_dispatchedChar,
+            _ => nint.Zero
+        };
     }
 
     private static void ActivateEnglishInput(nint edit)
@@ -333,6 +413,15 @@ internal static class NativeTestHost
     {
         if (message == WmWiciQueryImeState)
             return QueryImeState();
+
+        if (message == WmWiciQueryInputDiagnostic)
+            return QueryInputDiagnostic(wParam);
+
+        if (message == WmWiciResetInputDiagnostics)
+        {
+            ResetInputDiagnostics();
+            return (nint)1;
+        }
 
         if (message == WmWiciInitializeKoreanIme)
         {
