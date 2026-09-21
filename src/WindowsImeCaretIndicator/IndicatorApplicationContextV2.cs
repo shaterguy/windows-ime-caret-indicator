@@ -187,7 +187,13 @@ internal sealed class IndicatorApplicationContextV2 : ApplicationContext
     {
         _paused = paused;
         _settings.Paused = paused;
-        _settings.Save();
+        try
+        {
+            _settings.Save();
+        }
+        catch
+        {
+        }
         _pauseItem.Visible = !paused;
         _resumeItem.Visible = paused;
 

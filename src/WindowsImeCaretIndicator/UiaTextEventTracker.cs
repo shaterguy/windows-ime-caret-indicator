@@ -8,6 +8,8 @@ internal sealed class UiaTextEventTracker : IDisposable
     private readonly Action _requestRefresh;
     private readonly AutomationEventHandler _selectionHandler;
     private readonly AutomationEventHandler _textChangedHandler;
+    private bool _selectionRegistered;
+    private bool _textChangedRegistered;
     private bool _disposed;
 
     internal UiaTextEventTracker(Action requestRefresh)
@@ -16,17 +18,27 @@ internal sealed class UiaTextEventTracker : IDisposable
         _selectionHandler = OnTextEvent;
         _textChangedHandler = OnTextEvent;
 
-        Automation.AddAutomationEventHandler(
-            TextPattern.TextSelectionChangedEvent,
-            AutomationElement.RootElement,
-            TreeScope.Subtree,
-            _selectionHandler);
+        try
+        {
+            Automation.AddAutomationEventHandler(
+                TextPattern.TextSelectionChangedEvent,
+                AutomationElement.RootElement,
+                TreeScope.Subtree,
+                _selectionHandler);
+            _selectionRegistered = true;
 
-        Automation.AddAutomationEventHandler(
-            TextPattern.TextChangedEvent,
-            AutomationElement.RootElement,
-            TreeScope.Subtree,
-            _textChangedHandler);
+            Automation.AddAutomationEventHandler(
+                TextPattern.TextChangedEvent,
+                AutomationElement.RootElement,
+                TreeScope.Subtree,
+                _textChangedHandler);
+            _textChangedRegistered = true;
+        }
+        catch
+        {
+            Dispose();
+            throw;
+        }
     }
 
     private void OnTextEvent(object sender, AutomationEventArgs e)
@@ -42,17 +54,33 @@ internal sealed class UiaTextEventTracker : IDisposable
 
         _disposed = true;
 
+        if (_selectionRegistered)
+        {
+            TryRemove(
+                TextPattern.TextSelectionChangedEvent,
+                _selectionHandler);
+            _selectionRegistered = false;
+        }
+
+        if (_textChangedRegistered)
+        {
+            TryRemove(
+                TextPattern.TextChangedEvent,
+                _textChangedHandler);
+            _textChangedRegistered = false;
+        }
+    }
+
+    private static void TryRemove(
+        AutomationEvent eventId,
+        AutomationEventHandler handler)
+    {
         try
         {
             Automation.RemoveAutomationEventHandler(
-                TextPattern.TextSelectionChangedEvent,
+                eventId,
                 AutomationElement.RootElement,
-                _selectionHandler);
-
-            Automation.RemoveAutomationEventHandler(
-                TextPattern.TextChangedEvent,
-                AutomationElement.RootElement,
-                _textChangedHandler);
+                handler);
         }
         catch (InvalidOperationException)
         {
