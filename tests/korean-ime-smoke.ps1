@@ -26,6 +26,7 @@ public static class WiciImeHarness
     private const uint WM_WICI_INITIALIZE_ENGLISH_INPUT = 0x8003;
     private const uint WM_WICI_QUERY_INPUT_DIAGNOSTIC = 0x8004;
     private const uint WM_WICI_RESET_INPUT_DIAGNOSTICS = 0x8005;
+    private const uint WM_WICI_FOCUS_EDIT = 0x8006;
     private const uint INPUT_KEYBOARD = 1;
     private const uint KEYEVENTF_KEYUP = 0x0002;
     private const uint KEYEVENTF_SCANCODE = 0x0008;
@@ -340,6 +341,20 @@ public static class WiciImeHarness
         return transport != IntPtr.Zero && result != IntPtr.Zero;
     }
 
+    public static bool FocusEdit(IntPtr topWindow)
+    {
+        IntPtr result;
+        IntPtr transport = SendMessageTimeoutW(
+            topWindow,
+            WM_WICI_FOCUS_EDIT,
+            UIntPtr.Zero,
+            IntPtr.Zero,
+            SMTO_ABORTIFHUNG,
+            1000,
+            out result);
+        return transport != IntPtr.Zero && result != IntPtr.Zero;
+    }
+
     public static string GetInputDiagnostics(IntPtr topWindow)
     {
         return "queueKeyDown=" + QueryInputDiagnostic(topWindow, 1) +
@@ -349,6 +364,21 @@ public static class WiciImeHarness
                ", dispatchedKeyDown=" + QueryInputDiagnostic(topWindow, 5) +
                ", dispatchedKeyUp=" + QueryInputDiagnostic(topWindow, 6) +
                ", dispatchedChar=" + QueryInputDiagnostic(topWindow, 7);
+    }
+
+    public static bool IsTopWindowActive(IntPtr topWindow)
+    {
+        uint pid;
+        uint thread = GetWindowThreadProcessId(topWindow, out pid);
+        var info = new GUITHREADINFO
+        {
+            cbSize = (uint)Marshal.SizeOf<GUITHREADINFO>()
+        };
+        if (!GetGUIThreadInfo(thread, ref info))
+            return false;
+
+        return GetForegroundWindow() == topWindow &&
+               info.hwndActive == topWindow;
     }
 
     public static bool IsInputRoutedToEdit(IntPtr topWindow, IntPtr edit)
@@ -723,6 +753,14 @@ function Focus-TestHost {
     }
 
     try {
+        Wait-Until -Label "native test-host top-window activation" -TimeoutMs 2000 -Condition {
+            [WiciImeHarness]::IsTopWindowActive($Window)
+        }
+
+        if (-not [WiciImeHarness]::FocusEdit($Window)) {
+            throw "Unable to request target-thread EDIT focus."
+        }
+
         Wait-Until -Label "native test-host EDIT keyboard focus" -TimeoutMs 2000 -Condition {
             [WiciImeHarness]::IsInputRoutedToEdit(
                 $Window,
@@ -733,7 +771,7 @@ function Focus-TestHost {
         $routing = [WiciImeHarness]::GetInputRoutingEvidence(
             $Window,
             $script:edit)
-        throw "Native test-host focus routing mismatch. $routing"
+        throw "Native test-host focus routing mismatch. $routing $($_.Exception.Message)"
     }
 }
 

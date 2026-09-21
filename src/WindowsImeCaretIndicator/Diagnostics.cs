@@ -96,6 +96,7 @@ internal static class NativeTestHost
     private const uint WmWiciInitializeEnglishInput = 0x8003;
     private const uint WmWiciQueryInputDiagnostic = 0x8004;
     private const uint WmWiciResetInputDiagnostics = 0x8005;
+    private const uint WmWiciFocusEdit = 0x8006;
     private const uint WmKeyUp = 0x0101;
     private const uint WmChar = 0x0102;
     private static int _queueKeyDown;
@@ -420,6 +421,15 @@ internal static class NativeTestHost
         if (message == WmWiciResetInputDiagnostics)
         {
             ResetInputDiagnostics();
+            return (nint)1;
+        }
+
+        if (message == WmWiciFocusEdit)
+        {
+            if (_editWindow == nint.Zero)
+                return nint.Zero;
+
+            _ = Native.SetFocus(_editWindow);
             return (nint)1;
         }
 
