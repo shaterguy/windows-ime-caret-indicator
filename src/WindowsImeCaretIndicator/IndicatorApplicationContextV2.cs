@@ -140,7 +140,9 @@ internal sealed class IndicatorApplicationContextV2 : ApplicationContext
             return;
         }
 
-        _coalesceTimer.Stop();
+        if (_coalesceTimer.Enabled)
+            return;
+
         _coalesceTimer.Start();
     }
 
