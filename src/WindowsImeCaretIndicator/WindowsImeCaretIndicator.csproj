@@ -11,5 +11,11 @@
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <SelfContained>false</SelfContained>
     <PublishSingleFile>false</PublishSingleFile>
+    <VersionPrefix>0.1.0</VersionPrefix>
+    <VersionSuffix>dev1</VersionSuffix>
   </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="FlaUI.UIA3" Version="5.0.0" />
+  </ItemGroup>
 </Project>
