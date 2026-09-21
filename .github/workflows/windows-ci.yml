@@ -43,6 +43,8 @@ jobs:
           }
 
       - name: Chrome and Edge caret smoke tests
+        id: browser_smoke
+        continue-on-error: true
         shell: pwsh
         run: |
           $exe = Get-ChildItem "src/WindowsImeCaretIndicator/bin/Debug" -Recurse -Filter "WindowsImeCaretIndicator.exe" | Select-Object -First 1
@@ -118,3 +120,8 @@ jobs:
             artifacts/win-x64/WindowsImeCaretIndicator.exe
             artifacts/installer/WindowsImeCaretIndicator-Setup-*.exe
           if-no-files-found: error
+
+      - name: Enforce browser smoke result
+        if: steps.browser_smoke.outcome == 'failure'
+        shell: pwsh
+        run: throw "Browser caret smoke tests failed earlier in this job."
