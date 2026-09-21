@@ -32,7 +32,7 @@ internal sealed class IndicatorOverlayForm : Form
 
     internal void Present(Rectangle bounds, ImeMode mode)
     {
-        _label = mode == ImeMode.Korean ? "한" : "영";
+        _label = mode == global::WindowsImeCaretIndicator.ImeMode.Korean ? "한" : "영";
         if (Bounds != bounds)
             Bounds = bounds;
         UpdateRoundedRegion();
