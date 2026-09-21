@@ -748,20 +748,20 @@ function Get-TargetImeState {
 function Focus-TestHost {
     param([IntPtr]$Window)
 
-    if (-not [WiciImeHarness]::SetForegroundWindow($Window)) {
-        throw "Unable to foreground the native test host."
-    }
-
     try {
-        Wait-Until -Label "native test-host top-window activation" -TimeoutMs 2000 -Condition {
-            [WiciImeHarness]::IsTopWindowActive($Window)
-        }
+        Wait-Until -Label "native test-host foreground and EDIT keyboard focus" -TimeoutMs 2000 -Condition {
+            $foregroundRequested =
+                [WiciImeHarness]::SetForegroundWindow($Window)
 
-        if (-not [WiciImeHarness]::FocusEdit($Window)) {
-            throw "Unable to request target-thread EDIT focus."
-        }
+            if (-not $foregroundRequested -and
+                -not [WiciImeHarness]::IsTopWindowActive($Window)) {
+                return $false
+            }
 
-        Wait-Until -Label "native test-host EDIT keyboard focus" -TimeoutMs 2000 -Condition {
+            if (-not [WiciImeHarness]::FocusEdit($Window)) {
+                return $false
+            }
+
             [WiciImeHarness]::IsInputRoutedToEdit(
                 $Window,
                 $script:edit)
@@ -771,8 +771,71 @@ function Focus-TestHost {
         $routing = [WiciImeHarness]::GetInputRoutingEvidence(
             $Window,
             $script:edit)
-        throw "Native test-host focus routing mismatch. $routing $($_.Exception.Message)"
+        throw "Native test-host focus routing mismatch after bounded reacquisition. $routing $($_.Exception.Message)"
     }
+}
+
+function Initialize-KoreanIme {
+    param(
+        [Parameter(Mandatory = $true)]
+        [IntPtr]$Window,
+        [int]$MaxAttempts = 3
+    )
+
+    $attemptEvidence = @()
+
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        Focus-TestHost -Window $Window
+
+        $requestSucceeded =
+            [WiciImeHarness]::InitializeKoreanIme($Window)
+
+        if ($requestSucceeded) {
+            try {
+                Wait-Until -Label "target-thread Korean IME state on attempt $attempt" -TimeoutMs 1500 -Condition {
+                    if (-not [WiciImeHarness]::IsInputRoutedToEdit(
+                            $Window,
+                            $script:edit)) {
+                        return $false
+                    }
+
+                    $state = Get-TargetImeState -Window $Window
+                    [WiciImeHarness]::GetLanguageId($script:edit) -eq 0x0412 -and
+                    $state.languageId -eq "0x0412" -and
+                    $state.mode -eq "Korean"
+                }
+
+                return
+            }
+            catch {
+                $attemptEvidence +=
+                    "attempt=$attempt request=true state-not-ready"
+            }
+        }
+        else {
+            $attemptEvidence +=
+                "attempt=$attempt request=false"
+        }
+
+        if ($attempt -lt $MaxAttempts) {
+            Start-Sleep -Milliseconds 100
+        }
+    }
+
+    $lastState = $null
+    try {
+        $lastState = Get-TargetImeState -Window $Window
+    }
+    catch {
+        $lastState = [pscustomobject]@{
+            queryError = $_.Exception.Message
+        }
+    }
+
+    $routing = [WiciImeHarness]::GetInputRoutingEvidence(
+        $Window,
+        $script:edit)
+    throw "Unable to initialize and observe Korean IME inside the target test-host thread after $MaxAttempts bounded attempts. Attempts=$($attemptEvidence -join '; '). LastTarget=$($lastState | ConvertTo-Json -Compress). Routing=$routing"
 }
 
 function Clear-Edit {
@@ -964,9 +1027,7 @@ try {
     Clear-Edit
     Focus-TestHost -Window $window
 
-    if (-not [WiciImeHarness]::InitializeKoreanIme($window)) {
-        throw "Unable to initialize Korean IME inside the target test-host thread."
-    }
+    Initialize-KoreanIme -Window $window
 
     Wait-Until -Label "ko-KR input layout on test-host thread" -Condition {
         [WiciImeHarness]::GetLanguageId($edit) -eq 0x0412
