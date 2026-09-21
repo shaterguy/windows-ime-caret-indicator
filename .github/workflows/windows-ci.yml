@@ -64,9 +64,9 @@ jobs:
             throw "Installer was not produced."
           }
 
-          & $installer.FullName /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
-          if ($LASTEXITCODE -ne 0) {
-            throw "Silent installer failed with exit code $LASTEXITCODE."
+          $installProcess = Start-Process -FilePath $installer.FullName -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART" -Wait -PassThru
+          if ($installProcess.ExitCode -ne 0) {
+            throw "Silent installer failed with exit code $($installProcess.ExitCode)."
           }
 
           $installDir = Join-Path $env:LOCALAPPDATA "Programs\Windows IME Caret Indicator"
@@ -86,9 +86,9 @@ jobs:
             throw "Uninstaller was not found."
           }
 
-          & $uninstaller.FullName /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
-          if ($LASTEXITCODE -ne 0) {
-            throw "Silent uninstall failed with exit code $LASTEXITCODE."
+          $uninstallProcess = Start-Process -FilePath $uninstaller.FullName -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART" -Wait -PassThru
+          if ($uninstallProcess.ExitCode -ne 0) {
+            throw "Silent uninstall failed with exit code $($uninstallProcess.ExitCode)."
           }
 
           if (Test-Path $installedExe) {
