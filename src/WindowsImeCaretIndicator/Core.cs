@@ -179,7 +179,8 @@ internal static class SelfTests
         foreach (var error in errors)
             Console.Error.WriteLine(error);
 
-        const int total = 14;\n        Console.WriteLine($"{total - errors.Count}/{total} tests passed.");
+        const int total = 14;
+        Console.WriteLine($"{total - errors.Count}/{total} tests passed.");
         return errors.Count == 0 ? 0 : 1;
     }
 
