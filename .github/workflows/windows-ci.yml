@@ -88,6 +88,15 @@ jobs:
           }
           ./tests/korean-ime-smoke.ps1 -ExecutablePath $exe.FullName
 
+      - name: Discover mandatory Windows target environments
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem "src/WindowsImeCaretIndicator/bin/Debug" -Recurse -Filter "WindowsImeCaretIndicator.exe" | Select-Object -First 1
+          if (-not $exe) {
+            throw "Debug executable was not produced."
+          }
+          ./tests/windows-target-discovery.ps1 -ExecutablePath $exe.FullName
+
       - name: Publish Windows x64 self-contained
         run: dotnet publish src/WindowsImeCaretIndicator/WindowsImeCaretIndicator.csproj -c Release -r win-x64 --self-contained true --no-restore -p:PublishSingleFile=true -o artifacts/win-x64
 
