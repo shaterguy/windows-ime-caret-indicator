@@ -5,7 +5,7 @@ namespace WindowsImeCaretIndicator;
 
 internal static class DiagnosticRunner
 {
-    private static readonly CaretResolver CaretResolver = new();
+    private static readonly TextPattern2Bridge CaretResolver = new();
     private static readonly ImeStateReader ImeReader = new();
 
     internal static int Run()
