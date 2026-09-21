@@ -53,6 +53,31 @@ jobs:
           }
           ./tests/browser-caret-smoke.ps1 -ExecutablePath $exe.FullName
 
+      - name: Prepare Korean input profile
+        id: korean_profile
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $languages = Get-WinUserLanguageList
+          if (-not ($languages.LanguageTag -contains "ko-KR")) {
+            $languages.Add("ko-KR")
+            Set-WinUserLanguageList $languages -Force
+          }
+
+          Set-WinDefaultInputMethodOverride -InputTip "0412:{03B5835F-F03C-411B-9CE2-AA23E1171E36}{A028AE76-01B1-46C2-99C4-ACD9858AE02F}"
+          Get-WinUserLanguageList | Format-List LanguageTag, InputMethodTips
+
+      - name: Korean IME actual-input smoke test
+        id: korean_ime_smoke
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem "src/WindowsImeCaretIndicator/bin/Debug" -Recurse -Filter "WindowsImeCaretIndicator.exe" | Select-Object -First 1
+          if (-not $exe) {
+            throw "Debug executable was not produced."
+          }
+          ./tests/korean-ime-smoke.ps1 -ExecutablePath $exe.FullName
+
       - name: Publish Windows x64 self-contained
         run: dotnet publish src/WindowsImeCaretIndicator/WindowsImeCaretIndicator.csproj -c Release -r win-x64 --self-contained true --no-restore -p:PublishSingleFile=true -o artifacts/win-x64
 
@@ -121,7 +146,8 @@ jobs:
             artifacts/installer/WindowsImeCaretIndicator-Setup-*.exe
           if-no-files-found: error
 
-      - name: Enforce browser smoke result
-        if: steps.browser_smoke.outcome == 'failure'
+      - name: Enforce runtime smoke results
+        if: steps.browser_smoke.outcome == 'failure' || steps.korean_profile.outcome == 'failure' || steps.korean_ime_smoke.outcome == 'failure'
         shell: pwsh
-        run: throw "Browser caret smoke tests failed earlier in this job."
+        run: |
+          throw "One or more runtime smoke tests failed earlier in this job."
