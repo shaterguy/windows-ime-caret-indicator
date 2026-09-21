@@ -6,6 +6,10 @@ namespace WindowsImeCaretIndicator;
 
 internal sealed class AppSettings
 {
+    public AppSettings()
+    {
+    }
+
     public bool StartWithWindows { get; set; } = true;
 
     private static string SettingsDirectory =>
