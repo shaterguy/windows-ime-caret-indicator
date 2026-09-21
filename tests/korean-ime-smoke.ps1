@@ -18,6 +18,8 @@ public static class WiciImeHarness
     private static readonly UIntPtr IMC_SETCONVERSIONMODE = (UIntPtr)0x0002;
     private static readonly UIntPtr IMC_SETOPENSTATUS = (UIntPtr)0x0006;
     private const uint SMTO_ABORTIFHUNG = 0x0002;
+    private const uint WM_WICI_QUERY_IME_STATE = 0x8001;
+    private const uint WM_WICI_INITIALIZE_KOREAN_IME = 0x8002;
     private const uint INPUT_KEYBOARD = 1;
     private const uint KEYEVENTF_KEYUP = 0x0002;
     private const uint KEYEVENTF_SCANCODE = 0x0008;
@@ -148,6 +150,36 @@ public static class WiciImeHarness
         return unchecked((ushort)(hkl & 0xffff));
     }
 
+    public static bool InitializeKoreanIme(IntPtr topWindow)
+    {
+        IntPtr result;
+        IntPtr transport = SendMessageTimeoutW(
+            topWindow,
+            WM_WICI_INITIALIZE_KOREAN_IME,
+            UIntPtr.Zero,
+            IntPtr.Zero,
+            SMTO_ABORTIFHUNG,
+            1000,
+            out result);
+        return transport != IntPtr.Zero && result != IntPtr.Zero;
+    }
+
+    public static long QueryImeState(IntPtr topWindow)
+    {
+        IntPtr result;
+        IntPtr transport = SendMessageTimeoutW(
+            topWindow,
+            WM_WICI_QUERY_IME_STATE,
+            UIntPtr.Zero,
+            IntPtr.Zero,
+            SMTO_ABORTIFHUNG,
+            1000,
+            out result);
+        if (transport == IntPtr.Zero || result == IntPtr.Zero)
+            throw new InvalidOperationException("Unable to query target-process IME state.");
+        return result.ToInt64();
+    }
+
     public static bool SetImeMode(IntPtr edit, bool open, int conversion)
     {
         IntPtr ime = ImmGetDefaultIMEWnd(edit);
@@ -155,31 +187,26 @@ public static class WiciImeHarness
             return false;
 
         IntPtr result;
-        if (SendMessageTimeoutW(
-                ime,
-                WM_IME_CONTROL,
-                IMC_SETOPENSTATUS,
-                open ? new IntPtr(1) : IntPtr.Zero,
-                SMTO_ABORTIFHUNG,
-                1000,
-                out result) == IntPtr.Zero)
-        {
+        IntPtr transport = SendMessageTimeoutW(
+            ime,
+            WM_IME_CONTROL,
+            IMC_SETOPENSTATUS,
+            open ? new IntPtr(1) : IntPtr.Zero,
+            SMTO_ABORTIFHUNG,
+            1000,
+            out result);
+        if (transport == IntPtr.Zero || result != IntPtr.Zero)
             return false;
-        }
 
-        if (SendMessageTimeoutW(
-                ime,
-                WM_IME_CONTROL,
-                IMC_SETCONVERSIONMODE,
-                new IntPtr(conversion),
-                SMTO_ABORTIFHUNG,
-                1000,
-                out result) == IntPtr.Zero)
-        {
-            return false;
-        }
-
-        return true;
+        transport = SendMessageTimeoutW(
+            ime,
+            WM_IME_CONTROL,
+            IMC_SETCONVERSIONMODE,
+            new IntPtr(conversion),
+            SMTO_ABORTIFHUNG,
+            1000,
+            out result);
+        return transport != IntPtr.Zero && result == IntPtr.Zero;
     }
 
     public static void KeyDown(ushort vk) => SendKeyCore(vk, false);
@@ -293,6 +320,35 @@ function Invoke-Probe {
     return $line | ConvertFrom-Json
 }
 
+function Get-TargetImeState {
+    param([IntPtr]$Window)
+
+    [long]$packed = [WiciImeHarness]::QueryImeState($Window)
+    $languageId = [int](($packed -shr 16) -band 0xffff)
+    $conversion = [uint32](($packed -shr 32) -band 0xffff)
+    $open = (($packed -band 2) -ne 0)
+
+    if ($languageId -ne 0x0412) {
+        $mode = "English"
+    }
+    elseif (-not $open) {
+        $mode = "English"
+    }
+    elseif (($conversion -band 0x0001) -ne 0) {
+        $mode = "Korean"
+    }
+    else {
+        $mode = "English"
+    }
+
+    [pscustomobject]@{
+        languageId = ('0x{0:X4}' -f $languageId)
+        open = $open
+        conversion = [int]$conversion
+        mode = $mode
+    }
+}
+
 function Focus-TestHost {
     param([IntPtr]$Window)
 
@@ -360,28 +416,25 @@ try {
 
     Focus-TestHost -Window $window
 
-    $koreanLayout = [WiciImeHarness]::LoadKoreanLayout()
-    if ($koreanLayout -eq [IntPtr]::Zero) {
-        throw "Unable to load the ko-KR keyboard layout in the smoke-test driver."
-    }
-
-    if (-not [WiciImeHarness]::RequestKoreanLayout($window, $koreanLayout)) {
-        throw "Unable to request the ko-KR keyboard layout for the test-host window."
+    if (-not [WiciImeHarness]::InitializeKoreanIme($window)) {
+        throw "Unable to initialize Korean IME inside the target test-host thread."
     }
 
     Wait-Until -Label "ko-KR input layout on test-host thread" -Condition {
         [WiciImeHarness]::GetLanguageId($edit) -eq 0x0412
     }
 
-    if (-not [WiciImeHarness]::SetImeMode($edit, $true, 0x0001)) {
-        throw "Unable to initialize the test-host IME in Korean Native mode."
+    $targetKorean = Get-TargetImeState -Window $window
+    if ($targetKorean.languageId -ne "0x0412" -or
+        $targetKorean.mode -ne "Korean") {
+        throw "Target-process Korean setup mismatch: $($targetKorean | ConvertTo-Json -Compress)"
     }
 
     Start-Sleep -Milliseconds 120
     $initialProbe = Invoke-Probe
     if ($initialProbe.ime.languageId -ne "0x0412" -or
         $initialProbe.ime.mode -ne "Korean") {
-        throw "Korean setup probe mismatch: $($initialProbe | ConvertTo-Json -Compress -Depth 8)"
+        throw "Cross-process Korean probe mismatch. Target=$($targetKorean | ConvertTo-Json -Compress) Probe=$($initialProbe | ConvertTo-Json -Compress -Depth 8)"
     }
 
     $koreanProbe = $initialProbe
@@ -410,10 +463,15 @@ try {
     [WiciImeHarness]::Key(0x15) # VK_HANGUL: actual Korean/English toggle key
     Start-Sleep -Milliseconds 120
 
+    $targetEnglish = Get-TargetImeState -Window $window
+    if ($targetEnglish.mode -ne "English") {
+        throw "Target-process Hangul-key toggle did not enter English mode: $($targetEnglish | ConvertTo-Json -Compress)"
+    }
+
     $englishProbe = Invoke-Probe
     if ($englishProbe.ime.languageId -ne "0x0412" -or
         $englishProbe.ime.mode -ne "English") {
-        throw "English-after-Hangul-key probe mismatch: $($englishProbe | ConvertTo-Json -Compress -Depth 8)"
+        throw "English-after-Hangul-key probe mismatch. Target=$($targetEnglish | ConvertTo-Json -Compress) Probe=$($englishProbe | ConvertTo-Json -Compress -Depth 8)"
     }
 
     Focus-TestHost -Window $window
@@ -440,9 +498,14 @@ try {
     [WiciImeHarness]::Key(0x15)
     Start-Sleep -Milliseconds 120
 
+    $targetKoreanAgain = Get-TargetImeState -Window $window
+    if ($targetKoreanAgain.mode -ne "Korean") {
+        throw "Target-process second Hangul-key toggle did not return to Korean mode: $($targetKoreanAgain | ConvertTo-Json -Compress)"
+    }
+
     $koreanAgainProbe = Invoke-Probe
     if ($koreanAgainProbe.ime.mode -ne "Korean") {
-        throw "Korean-after-second-Hangul-key probe mismatch: $($koreanAgainProbe | ConvertTo-Json -Compress -Depth 8)"
+        throw "Korean-after-second-Hangul-key probe mismatch. Target=$($targetKoreanAgain | ConvertTo-Json -Compress) Probe=$($koreanAgainProbe | ConvertTo-Json -Compress -Depth 8)"
     }
 
     Write-Host "Hangul-key round-trip PASS: Korean -> English -> Korean."

@@ -91,6 +91,9 @@ internal static class NativeTestHost
         new("B5FE1F02-D5F2-4445-9C03-C568F23C99A1");
 
     private static readonly Native.WindowProc WindowProc = WndProc;
+    private const uint WmWiciQueryImeState = 0x8001;
+    private const uint WmWiciInitializeKoreanIme = 0x8002;
+    private static nint _editWindow;
 
     [ComImport]
     [Guid("71C6E74C-0F28-11D8-A82A-00065B84435C")]
@@ -163,6 +166,7 @@ internal static class NativeTestHost
             throw new InvalidOperationException(
                 $"CreateWindowExW(EDIT) failed: {Marshal.GetLastWin32Error()}");
 
+        _editWindow = edit;
         _ = Native.SetFocus(edit);
 
         if (activateKorean)
@@ -271,8 +275,64 @@ internal static class NativeTestHost
         }
     }
 
+    private static nint QueryImeState()
+    {
+        var edit = _editWindow;
+        if (edit == nint.Zero)
+            return nint.Zero;
+
+        var languageId = unchecked(
+            (ushort)((long)Native.GetKeyboardLayout(0) & 0xffff));
+        var himc = Native.ImmGetContext(edit);
+        if (himc == nint.Zero)
+            return nint.Zero;
+
+        try
+        {
+            var open = Native.ImmGetOpenStatus(himc);
+            if (!Native.ImmGetConversionStatus(
+                    himc,
+                    out var conversion,
+                    out _))
+            {
+                return nint.Zero;
+            }
+
+            long packed = 1;
+            if (open)
+                packed |= 1L << 1;
+            packed |= (long)languageId << 16;
+            packed |= ((long)conversion & 0xffff) << 32;
+            return (nint)packed;
+        }
+        finally
+        {
+            _ = Native.ImmReleaseContext(edit, himc);
+        }
+    }
+
     private static nint WndProc(nint hwnd, uint message, nuint wParam, nint lParam)
     {
+        if (message == WmWiciQueryImeState)
+            return QueryImeState();
+
+        if (message == WmWiciInitializeKoreanIme)
+        {
+            try
+            {
+                if (_editWindow == nint.Zero)
+                    return nint.Zero;
+
+                ActivateKoreanInput(_editWindow);
+                _ = Native.SetFocus(_editWindow);
+                return (nint)1;
+            }
+            catch
+            {
+                return nint.Zero;
+            }
+        }
+
         if (message == Native.WmDestroy)
         {
             Native.PostQuitMessage(0);
