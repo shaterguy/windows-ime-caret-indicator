@@ -129,6 +129,50 @@ internal static class SelfTests
                     2)),
             errors);
 
+        Check("left-edge stays inside to the right", () =>
+            Equal(
+                new Rectangle(5, 122, 16, 16),
+                OverlayPlacement.Choose(
+                    new Rectangle(0, 100, 1, 20),
+                    new Size(16, 16),
+                    new Rectangle(0, 0, 1920, 1080),
+                    4,
+                    2)),
+            errors);
+
+        Check("top-edge stays inside below", () =>
+            Equal(
+                new Rectangle(105, 22, 16, 16),
+                OverlayPlacement.Choose(
+                    new Rectangle(100, 0, 1, 20),
+                    new Size(16, 16),
+                    new Rectangle(0, 0, 1920, 1080),
+                    4,
+                    2)),
+            errors);
+
+        Check("top-left corner stays lower-right", () =>
+            Equal(
+                new Rectangle(5, 22, 16, 16),
+                OverlayPlacement.Choose(
+                    new Rectangle(0, 0, 1, 20),
+                    new Size(16, 16),
+                    new Rectangle(0, 0, 1920, 1080),
+                    4,
+                    2)),
+            errors);
+
+        Check("top-right corner flips lower-left", () =>
+            Equal(
+                new Rectangle(1895, 22, 16, 16),
+                OverlayPlacement.Choose(
+                    new Rectangle(1915, 0, 1, 20),
+                    new Size(16, 16),
+                    new Rectangle(0, 0, 1920, 1080),
+                    4,
+                    2)),
+            errors);
+
         Check("negative-coordinate monitor remains in work area", () =>
         {
             var workArea = new Rectangle(-1920, 0, 1920, 1080);
@@ -176,10 +220,21 @@ internal static class SelfTests
                     2)),
             errors);
 
+        Check("bottom-left corner flips upper-right", () =>
+            Equal(
+                new Rectangle(5, 1042, 16, 16),
+                OverlayPlacement.Choose(
+                    new Rectangle(0, 1060, 1, 20),
+                    new Size(16, 16),
+                    new Rectangle(0, 0, 1920, 1080),
+                    4,
+                    2)),
+            errors);
+
         foreach (var error in errors)
             Console.Error.WriteLine(error);
 
-        const int total = 14;
+        const int total = 19;
         Console.WriteLine($"{total - errors.Count}/{total} tests passed.");
         return errors.Count == 0 ? 0 : 1;
     }
