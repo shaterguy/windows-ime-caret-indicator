@@ -360,11 +360,19 @@ try {
 
     Focus-TestHost -Window $window
 
+    $koreanLayout = [WiciImeHarness]::LoadKoreanLayout()
+    if ($koreanLayout -eq [IntPtr]::Zero) {
+        throw "Unable to load the ko-KR keyboard layout in the smoke-test driver."
+    }
+
+    if (-not [WiciImeHarness]::RequestKoreanLayout($window, $koreanLayout)) {
+        throw "Unable to request the ko-KR keyboard layout for the test-host window."
+    }
+
     Wait-Until -Label "ko-KR input layout on test-host thread" -Condition {
         [WiciImeHarness]::GetLanguageId($edit) -eq 0x0412
     }
 
-    Start-Sleep -Milliseconds 150
     $initialProbe = Invoke-Probe
     if ($initialProbe.ime.languageId -ne "0x0412") {
         throw "Korean layout probe mismatch: $($initialProbe | ConvertTo-Json -Compress -Depth 8)"
