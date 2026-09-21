@@ -321,10 +321,27 @@ try {
     }
 
     Start-Sleep -Milliseconds 150
-    $koreanProbe = Invoke-Probe
+    $initialProbe = Invoke-Probe
+    if ($initialProbe.ime.languageId -ne "0x0412") {
+        throw "Korean layout probe mismatch: $($initialProbe | ConvertTo-Json -Compress -Depth 8)"
+    }
+
+    if ($initialProbe.ime.mode -eq "English") {
+        Focus-TestHost -Window $window
+        [WiciImeHarness]::Key(0x15) # VK_HANGUL: enter Korean mode from Korean layout
+        Start-Sleep -Milliseconds 150
+        $koreanProbe = Invoke-Probe
+    }
+    elseif ($initialProbe.ime.mode -eq "Korean") {
+        $koreanProbe = $initialProbe
+    }
+    else {
+        throw "Initial Korean-layout IME mode was unresolved: $($initialProbe | ConvertTo-Json -Compress -Depth 8)"
+    }
+
     if ($koreanProbe.ime.languageId -ne "0x0412" -or
         $koreanProbe.ime.mode -ne "Korean") {
-        throw "Korean probe mismatch: $($koreanProbe | ConvertTo-Json -Compress -Depth 8)"
+        throw "Korean-after-Hangul-key probe mismatch: $($koreanProbe | ConvertTo-Json -Compress -Depth 8)"
     }
 
     Focus-TestHost -Window $window
