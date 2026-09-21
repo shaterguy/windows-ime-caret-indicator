@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - v0.1.0-dev1
+      - work/runtime-validation
   workflow_dispatch:
 
 permissions:
