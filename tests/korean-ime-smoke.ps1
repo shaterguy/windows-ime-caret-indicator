@@ -18,6 +18,9 @@ public static class WiciImeHarness
     private static readonly UIntPtr IMC_SETCONVERSIONMODE = (UIntPtr)0x0002;
     private static readonly UIntPtr IMC_SETOPENSTATUS = (UIntPtr)0x0006;
     private const uint SMTO_ABORTIFHUNG = 0x0002;
+    private const uint WM_SETTEXT = 0x000C;
+    private const uint WM_GETTEXT = 0x000D;
+    private const uint WM_GETTEXTLENGTH = 0x000E;
     private const uint WM_WICI_QUERY_IME_STATE = 0x8001;
     private const uint WM_WICI_INITIALIZE_KOREAN_IME = 0x8002;
     private const uint WM_WICI_INITIALIZE_ENGLISH_INPUT = 0x8003;
@@ -126,12 +129,6 @@ public static class WiciImeHarness
         uint idThread,
         ref GUITHREADINFO info);
 
-    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    public static extern bool SetWindowTextW(
-        IntPtr hWnd,
-        string lpString);
-
     [DllImport("user32.dll")]
     public static extern IntPtr GetKeyboardLayout(uint idThread);
 
@@ -144,6 +141,36 @@ public static class WiciImeHarness
         uint msg,
         UIntPtr wParam,
         IntPtr lParam,
+        uint flags,
+        uint timeout,
+        out IntPtr result);
+
+    [DllImport(
+        "user32.dll",
+        EntryPoint = "SendMessageTimeoutW",
+        CharSet = CharSet.Unicode,
+        SetLastError = true,
+        ExactSpelling = true)]
+    private static extern IntPtr SendMessageTimeoutStringW(
+        IntPtr hWnd,
+        uint msg,
+        UIntPtr wParam,
+        string lParam,
+        uint flags,
+        uint timeout,
+        out IntPtr result);
+
+    [DllImport(
+        "user32.dll",
+        EntryPoint = "SendMessageTimeoutW",
+        CharSet = CharSet.Unicode,
+        SetLastError = true,
+        ExactSpelling = true)]
+    private static extern IntPtr SendMessageTimeoutBufferW(
+        IntPtr hWnd,
+        uint msg,
+        UIntPtr wParam,
+        StringBuilder lParam,
         uint flags,
         uint timeout,
         out IntPtr result);
@@ -211,15 +238,6 @@ public static class WiciImeHarness
         uint nInputs,
         INPUT[] pInputs,
         int cbSize);
-
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    private static extern int GetWindowTextLengthW(IntPtr hWnd);
-
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    private static extern int GetWindowTextW(
-        IntPtr hWnd,
-        StringBuilder lpString,
-        int nMaxCount);
 
     public static IntPtr LoadKoreanLayout()
     {
@@ -579,10 +597,61 @@ public static class WiciImeHarness
 
     public static string GetText(IntPtr hwnd)
     {
-        int length = GetWindowTextLengthW(hwnd);
-        var buffer = new StringBuilder(length + 2);
-        GetWindowTextW(hwnd, buffer, buffer.Capacity);
+        IntPtr lengthResult;
+        IntPtr lengthTransport = SendMessageTimeoutW(
+            hwnd,
+            WM_GETTEXTLENGTH,
+            UIntPtr.Zero,
+            IntPtr.Zero,
+            SMTO_ABORTIFHUNG,
+            1000,
+            out lengthResult);
+        if (lengthTransport == IntPtr.Zero)
+        {
+            throw new InvalidOperationException(
+                "WM_GETTEXTLENGTH timed out or failed. Win32=" +
+                Marshal.GetLastWin32Error() + ".");
+        }
+
+        long length = lengthResult.ToInt64();
+        if (length < 0 || length > int.MaxValue - 1)
+        {
+            throw new InvalidOperationException(
+                "WM_GETTEXTLENGTH returned an invalid length: " + length + ".");
+        }
+
+        var buffer = new StringBuilder((int)length + 1);
+        IntPtr readResult;
+        IntPtr readTransport = SendMessageTimeoutBufferW(
+            hwnd,
+            WM_GETTEXT,
+            (UIntPtr)(uint)buffer.Capacity,
+            buffer,
+            SMTO_ABORTIFHUNG,
+            1000,
+            out readResult);
+        if (readTransport == IntPtr.Zero)
+        {
+            throw new InvalidOperationException(
+                "WM_GETTEXT timed out or failed. Win32=" +
+                Marshal.GetLastWin32Error() + ".");
+        }
+
         return buffer.ToString();
+    }
+
+    public static bool SetText(IntPtr hwnd, string text)
+    {
+        IntPtr result;
+        IntPtr transport = SendMessageTimeoutStringW(
+            hwnd,
+            WM_SETTEXT,
+            UIntPtr.Zero,
+            text ?? string.Empty,
+            SMTO_ABORTIFHUNG,
+            1000,
+            out result);
+        return transport != IntPtr.Zero && result != IntPtr.Zero;
     }
 }
 "@
@@ -669,7 +738,7 @@ function Focus-TestHost {
 }
 
 function Clear-Edit {
-    if (-not [WiciImeHarness]::SetWindowTextW(
+    if (-not [WiciImeHarness]::SetText(
             $script:edit,
             "")) {
         throw "Unable to reset native EDIT text."
