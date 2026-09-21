@@ -10,6 +10,7 @@ internal sealed class IndicatorOverlayForm : Form
     internal IndicatorOverlayForm()
     {
         AutoScaleMode = AutoScaleMode.None;
+        AllowTransparency = true;
         BackColor = Color.Black;
         FormBorderStyle = FormBorderStyle.None;
         ShowInTaskbar = false;
