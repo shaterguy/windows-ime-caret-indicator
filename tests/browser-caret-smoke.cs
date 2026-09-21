@@ -3,6 +3,7 @@
 #:property JsonSerializerIsReflectionEnabledByDefault=true
 
 using System.Diagnostics;
+using System.Net;
 using System.Net.Http.Json;
 using System.Runtime.InteropServices;
 using System.Text.Json;
@@ -61,8 +62,11 @@ static async Task TestBrowserAsync(
     using var client = new HttpClient
     {
         BaseAddress = new Uri($"http://127.0.0.1:{port}/"),
-        Timeout = TimeSpan.FromSeconds(10)
+        Timeout = TimeSpan.FromSeconds(10),
+        DefaultRequestVersion = HttpVersion.Version11,
+        DefaultVersionPolicy = HttpVersionPolicy.RequestVersionExact
     };
+    client.DefaultRequestHeaders.ConnectionClose = true;
 
     string? sessionId = null;
 
