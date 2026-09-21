@@ -21,18 +21,22 @@ internal sealed class IndicatorApplicationContextV2 : ApplicationContext
     internal IndicatorApplicationContextV2()
     {
         _settings = AppSettings.Load();
+        _paused = _settings.Paused;
 
         _pauseItem = new ToolStripMenuItem(
             "표시 일시 정지",
             null,
-            (_, _) => SetPaused(true));
+            (_, _) => SetPaused(true))
+        {
+            Visible = !_paused
+        };
 
         _resumeItem = new ToolStripMenuItem(
             "표시 재개",
             null,
             (_, _) => SetPaused(false))
         {
-            Visible = false
+            Visible = _paused
         };
 
         _startupItem = new ToolStripMenuItem(
@@ -172,6 +176,8 @@ internal sealed class IndicatorApplicationContextV2 : ApplicationContext
     private void SetPaused(bool paused)
     {
         _paused = paused;
+        _settings.Paused = paused;
+        _settings.Save();
         _pauseItem.Visible = !paused;
         _resumeItem.Visible = paused;
 
