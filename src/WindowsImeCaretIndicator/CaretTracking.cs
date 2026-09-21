@@ -1,5 +1,7 @@
+using System.Drawing;
 using System.Runtime.InteropServices;
 using System.Windows.Automation;
+using System.Windows.Automation.Text;
 
 namespace WindowsImeCaretIndicator;
 
@@ -122,41 +124,41 @@ internal sealed class UiaCaretProvider : ICaretProvider
         return false;
     }
 
-    private static bool TryFirstRectangle(TextPatternRange range, out RectangleF rect)
+    private static bool TryFirstRectangle(TextPatternRange range, out System.Windows.Rect rect)
     {
-        var raw = range.GetBoundingRectangles();
-        if (raw is not { Length: >= 4 })
+        var rectangles = range.GetBoundingRectangles();
+        if (rectangles.Length == 0)
         {
-            rect = RectangleF.Empty;
+            rect = System.Windows.Rect.Empty;
             return false;
         }
 
-        rect = new RectangleF((float)raw[0], (float)raw[1], (float)raw[2], (float)raw[3]);
+        rect = rectangles[0];
         return IsUsable(rect);
     }
 
-    private static bool TryLastRectangle(TextPatternRange range, out RectangleF rect)
+    private static bool TryLastRectangle(TextPatternRange range, out System.Windows.Rect rect)
     {
-        var raw = range.GetBoundingRectangles();
-        if (raw is not { Length: >= 4 })
+        var rectangles = range.GetBoundingRectangles();
+        if (rectangles.Length == 0)
         {
-            rect = RectangleF.Empty;
+            rect = System.Windows.Rect.Empty;
             return false;
         }
 
-        var i = raw.Length - 4;
-        rect = new RectangleF((float)raw[i], (float)raw[i + 1], (float)raw[i + 2], (float)raw[i + 3]);
+        rect = rectangles[^1];
         return IsUsable(rect);
     }
 
-    private static bool IsUsable(RectangleF rect) =>
-        float.IsFinite(rect.X) &&
-        float.IsFinite(rect.Y) &&
-        float.IsFinite(rect.Width) &&
-        float.IsFinite(rect.Height) &&
-        rect.Height > 0.5f;
+    private static bool IsUsable(System.Windows.Rect rect) =>
+        !rect.IsEmpty &&
+        double.IsFinite(rect.X) &&
+        double.IsFinite(rect.Y) &&
+        double.IsFinite(rect.Width) &&
+        double.IsFinite(rect.Height) &&
+        rect.Height > 0.5;
 
-    private static Rectangle ToCaretEdge(RectangleF rect, bool useLeftEdge)
+    private static Rectangle ToCaretEdge(System.Windows.Rect rect, bool useLeftEdge)
     {
         var x = (int)Math.Round(useLeftEdge ? rect.Left : rect.Right);
         var y = (int)Math.Round(rect.Top);
@@ -236,9 +238,6 @@ internal sealed class Win32CaretProvider : ICaretProvider
             Math.Max(1, bottomRight.X - topLeft.X),
             Math.Max(1, bottomRight.Y - topLeft.Y));
 
-        if (caret.Height <= 0)
-            return false;
-
         state = new CaretState(caret, info.hwndFocus, threadId, "Win32.GetGUIThreadInfo");
         return true;
     }
@@ -297,6 +296,7 @@ internal sealed class ImeStateReader
         {
             var open = Native.ImmGetOpenStatus(himc);
             int? conversion = null;
+
             if (Native.ImmGetConversionStatus(himc, out var conversionValue, out _))
                 conversion = unchecked((int)conversionValue);
 
@@ -306,6 +306,7 @@ internal sealed class ImeStateReader
                 open,
                 conversion,
                 "IMM32.Direct");
+
             return conversion is not null;
         }
         finally
@@ -386,10 +387,12 @@ internal sealed class TrackingEvents : IDisposable
 
         var module = Native.GetModuleHandleW(null);
         _keyboardHook = Native.SetWindowsHookExW(Native.WhKeyboardLl, _keyboardDelegate, module, 0);
+
         if (_keyboardHook == nint.Zero)
         {
             Dispose();
-            throw new InvalidOperationException($"SetWindowsHookEx failed: {Marshal.GetLastWin32Error()}");
+            throw new InvalidOperationException(
+                $"SetWindowsHookEx failed: {Marshal.GetLastWin32Error()}");
         }
     }
 
