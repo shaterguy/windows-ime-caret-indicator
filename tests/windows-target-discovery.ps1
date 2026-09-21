@@ -313,7 +313,16 @@ function Focus-NamedDescendantForRename {
 
         if ($null -ne $target) {
             try {
+                $selectionPattern = $null
+                if ($target.TryGetCurrentPattern(
+                        [System.Windows.Automation.SelectionItemPattern]::Pattern,
+                        [ref]$selectionPattern)) {
+                    ([System.Windows.Automation.SelectionItemPattern]$selectionPattern).Select()
+                }
+
                 $target.SetFocus()
+                Start-Sleep -Milliseconds 200
+                $null = $Shell.AppActivate($Process.Id)
                 Start-Sleep -Milliseconds 150
             }
             catch {
