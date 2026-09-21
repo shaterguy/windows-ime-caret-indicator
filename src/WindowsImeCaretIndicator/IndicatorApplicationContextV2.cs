@@ -15,6 +15,7 @@ internal sealed class IndicatorApplicationContextV2 : ApplicationContext
     private readonly System.Windows.Forms.Timer _coalesceTimer;
     private readonly System.Windows.Forms.Timer _fallbackTimer;
     private TrackingEvents? _trackingEvents;
+    private UiaTextEventTracker? _uiaTextEvents;
     private bool _paused;
     private bool _disposed;
 
@@ -96,6 +97,15 @@ internal sealed class IndicatorApplicationContextV2 : ApplicationContext
         catch
         {
             _trackingEvents = null;
+        }
+
+        try
+        {
+            _uiaTextEvents = new UiaTextEventTracker(RequestRefresh);
+        }
+        catch
+        {
+            _uiaTextEvents = null;
         }
 
         try
@@ -215,6 +225,7 @@ internal sealed class IndicatorApplicationContextV2 : ApplicationContext
         _coalesceTimer.Stop();
         _fallbackTimer.Stop();
         _trackingEvents?.Dispose();
+        _uiaTextEvents?.Dispose();
         _caretResolver.Dispose();
         _overlay.Dismiss();
         _overlay.Dispose();
