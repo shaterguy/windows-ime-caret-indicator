@@ -6,7 +6,7 @@ namespace WindowsImeCaretIndicator;
 
 internal sealed class AppSettings
 {
-    internal bool StartWithWindows { get; set; } = true;
+    public bool StartWithWindows { get; set; } = true;
 
     private static string SettingsDirectory =>
         Path.Combine(
@@ -261,6 +261,7 @@ internal sealed class IndicatorApplicationContext : ApplicationContext
         _coalesceTimer.Stop();
         _fallbackTimer.Stop();
         _trackingEvents?.Dispose();
+        _caretResolver.Dispose();
         _overlay.Dismiss();
         _overlay.Dispose();
         _trayIcon.Visible = false;
