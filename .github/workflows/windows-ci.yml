@@ -1,0 +1,60 @@
+name: Windows CI
+
+on:
+  push:
+    branches:
+      - v0.1.0-dev1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Exclude superseded tracking draft
+        shell: pwsh
+        run: |
+          $draft = "src/WindowsImeCaretIndicator/CaretTrackingV2.cs"
+          if (Test-Path $draft) {
+            Rename-Item $draft "CaretTrackingV2.cs.disabled"
+          }
+
+      - name: Restore
+        run: dotnet restore src/WindowsImeCaretIndicator/WindowsImeCaretIndicator.csproj
+
+      - name: Build debug runtime
+        run: dotnet build src/WindowsImeCaretIndicator/WindowsImeCaretIndicator.csproj -c Debug --no-restore -p:StartupObject=WindowsImeCaretIndicator.ProgramV2
+
+      - name: Run deterministic self tests
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem "src/WindowsImeCaretIndicator/bin/Debug" -Recurse -Filter "WindowsImeCaretIndicator.exe" | Select-Object -First 1
+          if (-not $exe) {
+            throw "Debug executable was not produced."
+          }
+          & $exe.FullName --self-test
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+      - name: Publish Windows x64 self-contained
+        run: dotnet publish src/WindowsImeCaretIndicator/WindowsImeCaretIndicator.csproj -c Release -r win-x64 --self-contained true --no-restore -p:PublishSingleFile=true -p:StartupObject=WindowsImeCaretIndicator.ProgramV2 -o artifacts/win-x64
+
+      - name: Upload executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: WindowsImeCaretIndicator-win-x64
+          path: artifacts/win-x64/WindowsImeCaretIndicator.exe
+          if-no-files-found: error
