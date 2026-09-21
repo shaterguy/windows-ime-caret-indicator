@@ -24,6 +24,11 @@ public static class WiciImeHarness
     private const uint INPUT_KEYBOARD = 1;
     private const uint KEYEVENTF_KEYUP = 0x0002;
     private const uint KEYEVENTF_SCANCODE = 0x0008;
+    private const int UOI_NAME = 2;
+    private const uint DESKTOP_READOBJECTS = 0x0001;
+    private const uint WM_KEYDOWN = 0x0100;
+    private const uint WM_KEYUP = 0x0101;
+    private const uint MAPVK_VK_TO_VSC = 0;
 
     [StructLayout(LayoutKind.Sequential)]
     private struct INPUT
@@ -147,6 +152,57 @@ public static class WiciImeHarness
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool SetForegroundWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetProcessWindowStation();
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetThreadDesktop(uint dwThreadId);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern IntPtr OpenInputDesktop(
+        uint dwFlags,
+        [MarshalAs(UnmanagedType.Bool)] bool fInherit,
+        uint dwDesiredAccess);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CloseDesktop(IntPtr hDesktop);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetUserObjectInformationW(
+        IntPtr hObj,
+        int nIndex,
+        StringBuilder pvInfo,
+        uint nLength,
+        out uint lpnLengthNeeded);
+
+    [DllImport("kernel32.dll")]
+    private static extern uint GetCurrentThreadId();
+
+    [DllImport("kernel32.dll")]
+    private static extern uint GetCurrentProcessId();
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool ProcessIdToSessionId(
+        uint dwProcessId,
+        out uint pSessionId);
+
+    [DllImport("kernel32.dll")]
+    private static extern uint WTSGetActiveConsoleSessionId();
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool PostMessageW(
+        IntPtr hWnd,
+        uint msg,
+        UIntPtr wParam,
+        IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    private static extern uint MapVirtualKeyW(uint uCode, uint uMapType);
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern uint SendInput(
@@ -273,6 +329,108 @@ public static class WiciImeHarness
                ", caret=" + info.hwndCaret.ToInt64() +
                ", targetTop=" + topWindow.ToInt64() +
                ", targetEdit=" + edit.ToInt64();
+    }
+
+    private static string GetUserObjectName(IntPtr handle)
+    {
+        if (handle == IntPtr.Zero)
+            return "<null>";
+
+        uint required;
+        GetUserObjectInformationW(
+            handle,
+            UOI_NAME,
+            null,
+            0,
+            out required);
+        if (required == 0)
+            return "<unavailable win32=" + Marshal.GetLastWin32Error() + ">";
+
+        var buffer = new StringBuilder((int)required);
+        if (!GetUserObjectInformationW(
+                handle,
+                UOI_NAME,
+                buffer,
+                required,
+                out required))
+        {
+            return "<unavailable win32=" + Marshal.GetLastWin32Error() + ">";
+        }
+
+        return buffer.ToString();
+    }
+
+    public static string GetExecutionEnvironmentEvidence()
+    {
+        string processWindowStation =
+            GetUserObjectName(GetProcessWindowStation());
+        string threadDesktop =
+            GetUserObjectName(GetThreadDesktop(GetCurrentThreadId()));
+
+        IntPtr inputDesktop = OpenInputDesktop(
+            0,
+            false,
+            DESKTOP_READOBJECTS);
+        string inputDesktopName;
+        if (inputDesktop == IntPtr.Zero)
+        {
+            inputDesktopName =
+                "<unavailable win32=" + Marshal.GetLastWin32Error() + ">";
+        }
+        else
+        {
+            try
+            {
+                inputDesktopName = GetUserObjectName(inputDesktop);
+            }
+            finally
+            {
+                CloseDesktop(inputDesktop);
+            }
+        }
+
+        uint processSession;
+        string processSessionText =
+            ProcessIdToSessionId(GetCurrentProcessId(), out processSession)
+                ? processSession.ToString()
+                : "<unavailable win32=" + Marshal.GetLastWin32Error() + ">";
+
+        uint activeConsoleSession = WTSGetActiveConsoleSessionId();
+
+        return "processWindowStation=" + processWindowStation +
+               ", threadDesktop=" + threadDesktop +
+               ", inputDesktop=" + inputDesktopName +
+               ", processSession=" + processSessionText +
+               ", activeConsoleSession=" + activeConsoleSession;
+    }
+
+    public static void PostKeyMessage(IntPtr hwnd, ushort vk)
+    {
+        uint scanCode = MapVirtualKeyW(vk, MAPVK_VK_TO_VSC);
+        uint keyDownLParam = 1u | ((scanCode & 0xffu) << 16);
+        uint keyUpLParam = keyDownLParam | 0xC0000000u;
+
+        if (!PostMessageW(
+                hwnd,
+                WM_KEYDOWN,
+                (UIntPtr)vk,
+                new IntPtr(unchecked((int)keyDownLParam))))
+        {
+            throw new InvalidOperationException(
+                "PostMessageW(WM_KEYDOWN) failed. Win32=" +
+                Marshal.GetLastWin32Error() + ".");
+        }
+
+        if (!PostMessageW(
+                hwnd,
+                WM_KEYUP,
+                (UIntPtr)vk,
+                new IntPtr(unchecked((int)keyUpLParam))))
+        {
+            throw new InvalidOperationException(
+                "PostMessageW(WM_KEYUP) failed. Win32=" +
+                Marshal.GetLastWin32Error() + ".");
+        }
     }
 
     public static bool SetImeMode(IntPtr edit, bool open, int conversion)
@@ -614,7 +772,23 @@ try {
             $routing = [WiciImeHarness]::GetInputRoutingEvidence(
                 $window,
                 $edit)
-            throw "Keyboard SendInput delivery failed in English baseline for both scan-code and virtual-key paths. ScanText='$scanFailureText'. VirtualText='$virtualFailureText'. Routing=$routing"
+            $executionEnvironment =
+                [WiciImeHarness]::GetExecutionEnvironmentEvidence()
+
+            Clear-Edit
+            Focus-TestHost -Window $window
+            [WiciImeHarness]::PostKeyMessage($edit, 0x41)
+            [WiciImeHarness]::PostKeyMessage($edit, 0x42)
+            [WiciImeHarness]::PostKeyMessage($edit, 0x43)
+            $postMessageDelivered =
+                Test-TextContains -Needle "abc"
+            $postMessageText = [WiciImeHarness]::GetText($edit)
+
+            if ($postMessageDelivered) {
+                throw "Keyboard SendInput delivery failed in English baseline for both scan-code and virtual-key paths, while the diagnostic window-scoped PostMessage path produced 'abc'. The Win32 target/message-pump path works, but OS-wide SendInput delivery is unavailable in this execution environment. PostMessage is diagnostic only and is not actual-input proof. ScanText='$scanFailureText'. VirtualText='$virtualFailureText'. PostMessageText='$postMessageText'. Routing=$routing. ExecutionEnvironment=$executionEnvironment"
+            }
+
+            throw "Keyboard SendInput delivery failed in English baseline for both scan-code and virtual-key paths, and the diagnostic window-scoped PostMessage path also failed to produce 'abc'. The failure remains at or before the target message-processing path and needs deeper target-side instrumentation. ScanText='$scanFailureText'. VirtualText='$virtualFailureText'. PostMessageText='$postMessageText'. Routing=$routing. ExecutionEnvironment=$executionEnvironment"
         }
 
         $inputPath = "VirtualKey"
