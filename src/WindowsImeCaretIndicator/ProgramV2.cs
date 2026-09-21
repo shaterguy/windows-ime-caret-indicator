@@ -31,6 +31,13 @@ internal static class ProgramV2
         }
 
         if (args.Contains(
+                "--probe-once",
+                StringComparer.OrdinalIgnoreCase))
+        {
+            return ProbeOnceRunner.Run();
+        }
+
+        if (args.Contains(
                 "--diagnose",
                 StringComparer.OrdinalIgnoreCase))
         {
