@@ -20,7 +20,7 @@ public static class WiciImeHarness
     private const uint SMTO_ABORTIFHUNG = 0x0002;
     private const uint WM_WICI_QUERY_IME_STATE = 0x8001;
     private const uint WM_WICI_INITIALIZE_KOREAN_IME = 0x8002;
-    private const uint WM_WICI_SET_IME_OPEN = 0x8003;
+    private const uint WM_WICI_INITIALIZE_ENGLISH_INPUT = 0x8003;
     private const uint INPUT_KEYBOARD = 1;
     private const uint KEYEVENTF_KEYUP = 0x0002;
     private const uint KEYEVENTF_SCANCODE = 0x0008;
@@ -203,13 +203,13 @@ public static class WiciImeHarness
         return transport != IntPtr.Zero && result != IntPtr.Zero;
     }
 
-    public static bool SetTargetImeOpen(IntPtr topWindow, bool open)
+    public static bool InitializeEnglishInput(IntPtr topWindow)
     {
         IntPtr result;
         IntPtr transport = SendMessageTimeoutW(
             topWindow,
-            WM_WICI_SET_IME_OPEN,
-            open ? (UIntPtr)1 : UIntPtr.Zero,
+            WM_WICI_INITIALIZE_ENGLISH_INPUT,
+            UIntPtr.Zero,
             IntPtr.Zero,
             SMTO_ABORTIFHUNG,
             1000,
@@ -553,7 +553,7 @@ if (-not (Test-Path $ExecutablePath)) {
     throw "Executable was not found at '$ExecutablePath'."
 }
 
-$hostProcess = Start-Process -FilePath $ExecutablePath -ArgumentList "--test-host-korean" -PassThru
+$hostProcess = Start-Process -FilePath $ExecutablePath -ArgumentList "--test-host" -PassThru
 $script:edit = [IntPtr]::Zero
 
 try {
@@ -577,19 +577,23 @@ try {
 
     Focus-TestHost -Window $window
 
-    if (-not [WiciImeHarness]::SetTargetImeOpen(
-            $window,
-            $false)) {
-        throw "Unable to place target test-host IME in English/alphanumeric baseline mode."
+    if (-not [WiciImeHarness]::InitializeEnglishInput($window)) {
+        throw "Unable to initialize en-US input inside the target test-host thread."
     }
-
-    Wait-Until -Label "target-process English baseline" -Condition {
-        (Get-TargetImeState -Window $window).mode -eq "English"
+    try {
+        Wait-Until -Label "target-process en-US English baseline" -Condition {
+            $state = Get-TargetImeState -Window $window
+            $state.languageId -eq "0x0409" -and
+            $state.mode -eq "English"
+        }
     }
-
+    catch {
+        $lastTargetState = Get-TargetImeState -Window $window
+        throw "Target-process en-US English baseline did not become observable. LastTarget=$($lastTargetState | ConvertTo-Json -Compress). $($_.Exception.Message)"
+    }
     $targetEnglishBaseline = Get-TargetImeState -Window $window
     $englishBaselineProbe = Invoke-Probe
-    if ($englishBaselineProbe.ime.languageId -ne "0x0412" -or
+    if ($englishBaselineProbe.ime.languageId -ne "0x0409" -or
         $englishBaselineProbe.ime.mode -ne "English") {
         throw "English baseline target/product mismatch. Target=$($targetEnglishBaseline | ConvertTo-Json -Compress) Probe=$($englishBaselineProbe | ConvertTo-Json -Compress -Depth 8)"
     }

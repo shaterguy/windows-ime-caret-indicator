@@ -93,7 +93,7 @@ internal static class NativeTestHost
     private static readonly Native.WindowProc WindowProc = WndProc;
     private const uint WmWiciQueryImeState = 0x8001;
     private const uint WmWiciInitializeKoreanIme = 0x8002;
-    private const uint WmWiciSetImeOpen = 0x8003;
+    private const uint WmWiciInitializeEnglishInput = 0x8003;
     private static nint _editWindow;
 
     [ComImport]
@@ -183,6 +183,23 @@ internal static class NativeTestHost
         }
 
         return 0;
+    }
+
+    private static void ActivateEnglishInput(nint edit)
+    {
+        var hkl = Native.LoadKeyboardLayoutW("00000409", Native.KlfActivate);
+        if (hkl == nint.Zero)
+            throw new InvalidOperationException(
+                $"LoadKeyboardLayoutW(en-US) failed: {Marshal.GetLastWin32Error()}");
+        if (Native.ActivateKeyboardLayout(hkl, 0) == nint.Zero)
+            throw new InvalidOperationException(
+                $"ActivateKeyboardLayout(en-US) failed: {Marshal.GetLastWin32Error()}");
+        var languageId = unchecked(
+            (ushort)((long)Native.GetKeyboardLayout(0) & 0xffff));
+        if (languageId != 0x0409)
+            throw new InvalidOperationException(
+                $"Test host did not activate en-US. LanguageId=0x{languageId:X4}");
+        _ = Native.SetFocus(edit);
     }
 
     private static void ActivateKoreanInput(nint edit)
@@ -312,30 +329,6 @@ internal static class NativeTestHost
         }
     }
 
-    private static nint SetImeOpen(bool open)
-    {
-        var edit = _editWindow;
-        if (edit == nint.Zero)
-            return nint.Zero;
-
-        var himc = Native.ImmGetContext(edit);
-        if (himc == nint.Zero)
-            return nint.Zero;
-
-        try
-        {
-            if (!Native.ImmSetOpenStatus(himc, open))
-                return nint.Zero;
-
-            _ = Native.SetFocus(edit);
-            return (nint)1;
-        }
-        finally
-        {
-            _ = Native.ImmReleaseContext(edit, himc);
-        }
-    }
-
     private static nint WndProc(nint hwnd, uint message, nuint wParam, nint lParam)
     {
         if (message == WmWiciQueryImeState)
@@ -358,8 +351,21 @@ internal static class NativeTestHost
             }
         }
 
-        if (message == WmWiciSetImeOpen)
-            return SetImeOpen(wParam != 0);
+        if (message == WmWiciInitializeEnglishInput)
+        {
+            try
+            {
+                if (_editWindow == nint.Zero)
+                    return nint.Zero;
+                ActivateEnglishInput(_editWindow);
+                _ = Native.SetFocus(_editWindow);
+                return (nint)1;
+            }
+            catch
+            {
+                return nint.Zero;
+            }
+        }
 
         if (message == Native.WmDestroy)
         {
