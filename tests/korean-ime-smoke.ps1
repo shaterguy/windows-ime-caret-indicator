@@ -32,7 +32,24 @@ public static class WiciImeHarness
     private struct InputUnion
     {
         [FieldOffset(0)]
+        public MOUSEINPUT mi;
+
+        [FieldOffset(0)]
         public KEYBDINPUT ki;
+
+        [FieldOffset(0)]
+        public HARDWAREINPUT hi;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MOUSEINPUT
+    {
+        public int dx;
+        public int dy;
+        public uint mouseData;
+        public uint dwFlags;
+        public uint time;
+        public UIntPtr dwExtraInfo;
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -43,6 +60,14 @@ public static class WiciImeHarness
         public uint dwFlags;
         public uint time;
         public UIntPtr dwExtraInfo;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct HARDWAREINPUT
+    {
+        public uint uMsg;
+        public ushort wParamL;
+        public ushort wParamH;
     }
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
@@ -81,7 +106,7 @@ public static class WiciImeHarness
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool SetForegroundWindow(IntPtr hWnd);
 
-    [DllImport("user32.dll")]
+    [DllImport("user32.dll", SetLastError = true)]
     private static extern uint SendInput(
         uint nInputs,
         INPUT[] pInputs,
@@ -185,8 +210,12 @@ public static class WiciImeHarness
         };
 
         var inputs = new[] { input };
-        if (SendInput(1, inputs, Marshal.SizeOf<INPUT>()) != 1)
-            throw new InvalidOperationException("SendInput failed.");
+        int inputSize = Marshal.SizeOf<INPUT>();
+        if (SendInput(1, inputs, inputSize) != 1)
+        {
+            throw new InvalidOperationException(
+                $"SendInput failed. Win32={Marshal.GetLastWin32Error()}, cbSize={inputSize}.");
+        }
     }
 
     public static string GetText(IntPtr hwnd)
