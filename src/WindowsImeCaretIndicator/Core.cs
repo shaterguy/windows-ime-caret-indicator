@@ -145,13 +145,41 @@ internal static class SelfTests
         Check("100 percent DPI size follows caret height", () =>
             Equal(new Size(13, 13), OverlayMetrics.CalculateSize(new Rectangle(0, 0, 1, 20), 96)), errors);
 
+        Check("125 percent DPI minimum scales", () =>
+            Equal(new Size(15, 15), OverlayMetrics.CalculateSize(new Rectangle(0, 0, 1, 20), 120)), errors);
+
+        Check("150 percent DPI minimum scales", () =>
+            Equal(new Size(18, 18), OverlayMetrics.CalculateSize(new Rectangle(0, 0, 1, 20), 144)), errors);
+
         Check("200 percent DPI minimum scales", () =>
             Equal(new Size(24, 24), OverlayMetrics.CalculateSize(new Rectangle(0, 0, 1, 20), 192)), errors);
+
+        Check("bottom edge flips above", () =>
+            Equal(
+                new Rectangle(105, 1042, 16, 16),
+                OverlayPlacement.Choose(
+                    new Rectangle(100, 1060, 1, 20),
+                    new Size(16, 16),
+                    new Rectangle(0, 0, 1920, 1080),
+                    4,
+                    2)),
+            errors);
+
+        Check("bottom-right corner flips upper-left", () =>
+            Equal(
+                new Rectangle(1895, 1042, 16, 16),
+                OverlayPlacement.Choose(
+                    new Rectangle(1915, 1060, 1, 20),
+                    new Size(16, 16),
+                    new Rectangle(0, 0, 1920, 1080),
+                    4,
+                    2)),
+            errors);
 
         foreach (var error in errors)
             Console.Error.WriteLine(error);
 
-        Console.WriteLine($"{10 - errors.Count}/10 tests passed.");
+        const int total = 14;\n        Console.WriteLine($"{total - errors.Count}/{total} tests passed.");
         return errors.Count == 0 ? 0 : 1;
     }
 
