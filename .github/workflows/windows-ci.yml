@@ -12,7 +12,7 @@ permissions:
 jobs:
   build-test:
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
 
     steps:
       - name: Checkout
@@ -23,19 +23,11 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
-      - name: Exclude superseded tracking draft
-        shell: pwsh
-        run: |
-          $draft = "src/WindowsImeCaretIndicator/CaretTrackingV2.cs"
-          if (Test-Path $draft) {
-            Rename-Item $draft "CaretTrackingV2.cs.disabled"
-          }
-
-      - name: Restore
+      - name: Restore Windows runtime
         run: dotnet restore src/WindowsImeCaretIndicator/WindowsImeCaretIndicator.csproj -r win-x64
 
       - name: Build debug runtime
-        run: dotnet build src/WindowsImeCaretIndicator/WindowsImeCaretIndicator.csproj -c Debug --no-restore -p:StartupObject=WindowsImeCaretIndicator.ProgramV2
+        run: dotnet build src/WindowsImeCaretIndicator/WindowsImeCaretIndicator.csproj -c Debug --no-restore
 
       - name: Run deterministic self tests
         shell: pwsh
@@ -50,11 +42,69 @@ jobs:
           }
 
       - name: Publish Windows x64 self-contained
-        run: dotnet publish src/WindowsImeCaretIndicator/WindowsImeCaretIndicator.csproj -c Release -r win-x64 --self-contained true --no-restore -p:PublishSingleFile=true -p:StartupObject=WindowsImeCaretIndicator.ProgramV2 -o artifacts/win-x64
+        run: dotnet publish src/WindowsImeCaretIndicator/WindowsImeCaretIndicator.csproj -c Release -r win-x64 --self-contained true --no-restore -p:PublishSingleFile=true -o artifacts/win-x64
 
-      - name: Upload executable
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --version=6.7.1 -y --no-progress
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          ISCC.exe /DMyAppVersion=0.1.0-dev1 installer/WindowsImeCaretIndicator.iss
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+      - name: Install and uninstall smoke test
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem "artifacts/installer" -Filter "WindowsImeCaretIndicator-Setup-*.exe" | Select-Object -First 1
+          if (-not $installer) {
+            throw "Installer was not produced."
+          }
+
+          & $installer.FullName /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+          if ($LASTEXITCODE -ne 0) {
+            throw "Silent installer failed with exit code $LASTEXITCODE."
+          }
+
+          $installDir = Join-Path $env:LOCALAPPDATA "Programs\Windows IME Caret Indicator"
+          $installedExe = Join-Path $installDir "WindowsImeCaretIndicator.exe"
+          if (-not (Test-Path $installedExe)) {
+            throw "Installed executable was not found."
+          }
+
+          $runKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
+          $runValue = (Get-ItemProperty -Path $runKey -Name "WindowsImeCaretIndicator" -ErrorAction Stop).WindowsImeCaretIndicator
+          if ($runValue -notlike "*WindowsImeCaretIndicator.exe*") {
+            throw "Startup registration was not created."
+          }
+
+          $uninstaller = Get-ChildItem $installDir -Filter "unins*.exe" | Select-Object -First 1
+          if (-not $uninstaller) {
+            throw "Uninstaller was not found."
+          }
+
+          & $uninstaller.FullName /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+          if ($LASTEXITCODE -ne 0) {
+            throw "Silent uninstall failed with exit code $LASTEXITCODE."
+          }
+
+          if (Test-Path $installedExe) {
+            throw "Installed executable remains after uninstall."
+          }
+
+          $remaining = Get-ItemProperty -Path $runKey -Name "WindowsImeCaretIndicator" -ErrorAction SilentlyContinue
+          if ($null -ne $remaining) {
+            throw "Startup registration remains after uninstall."
+          }
+
+      - name: Upload distribution files
         uses: actions/upload-artifact@v4
         with:
           name: WindowsImeCaretIndicator-win-x64
-          path: artifacts/win-x64/WindowsImeCaretIndicator.exe
+          path: |
+            artifacts/win-x64/WindowsImeCaretIndicator.exe
+            artifacts/installer/WindowsImeCaretIndicator-Setup-*.exe
           if-no-files-found: error
