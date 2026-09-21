@@ -93,6 +93,7 @@ internal static class NativeTestHost
     private static readonly Native.WindowProc WindowProc = WndProc;
     private const uint WmWiciQueryImeState = 0x8001;
     private const uint WmWiciInitializeKoreanIme = 0x8002;
+    private const uint WmWiciSetImeOpen = 0x8003;
     private static nint _editWindow;
 
     [ComImport]
@@ -311,6 +312,30 @@ internal static class NativeTestHost
         }
     }
 
+    private static nint SetImeOpen(bool open)
+    {
+        var edit = _editWindow;
+        if (edit == nint.Zero)
+            return nint.Zero;
+
+        var himc = Native.ImmGetContext(edit);
+        if (himc == nint.Zero)
+            return nint.Zero;
+
+        try
+        {
+            if (!Native.ImmSetOpenStatus(himc, open))
+                return nint.Zero;
+
+            _ = Native.SetFocus(edit);
+            return (nint)1;
+        }
+        finally
+        {
+            _ = Native.ImmReleaseContext(edit, himc);
+        }
+    }
+
     private static nint WndProc(nint hwnd, uint message, nuint wParam, nint lParam)
     {
         if (message == WmWiciQueryImeState)
@@ -332,6 +357,9 @@ internal static class NativeTestHost
                 return nint.Zero;
             }
         }
+
+        if (message == WmWiciSetImeOpen)
+            return SetImeOpen(wParam != 0);
 
         if (message == Native.WmDestroy)
         {

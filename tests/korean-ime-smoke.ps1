@@ -20,6 +20,7 @@ public static class WiciImeHarness
     private const uint SMTO_ABORTIFHUNG = 0x0002;
     private const uint WM_WICI_QUERY_IME_STATE = 0x8001;
     private const uint WM_WICI_INITIALIZE_KOREAN_IME = 0x8002;
+    private const uint WM_WICI_SET_IME_OPEN = 0x8003;
     private const uint INPUT_KEYBOARD = 1;
     private const uint KEYEVENTF_KEYUP = 0x0002;
     private const uint KEYEVENTF_SCANCODE = 0x0008;
@@ -73,6 +74,29 @@ public static class WiciImeHarness
         public ushort wParamH;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RECT
+    {
+        public int left;
+        public int top;
+        public int right;
+        public int bottom;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct GUITHREADINFO
+    {
+        public uint cbSize;
+        public uint flags;
+        public IntPtr hwndActive;
+        public IntPtr hwndFocus;
+        public IntPtr hwndCapture;
+        public IntPtr hwndMenuOwner;
+        public IntPtr hwndMoveSize;
+        public IntPtr hwndCaret;
+        public RECT rcCaret;
+    }
+
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     public static extern IntPtr FindWindowW(string lpClassName, string lpWindowName);
 
@@ -85,6 +109,21 @@ public static class WiciImeHarness
 
     [DllImport("user32.dll")]
     public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetGUIThreadInfo(
+        uint idThread,
+        ref GUITHREADINFO info);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool SetWindowTextW(
+        IntPtr hWnd,
+        string lpString);
 
     [DllImport("user32.dll")]
     public static extern IntPtr GetKeyboardLayout(uint idThread);
@@ -164,6 +203,20 @@ public static class WiciImeHarness
         return transport != IntPtr.Zero && result != IntPtr.Zero;
     }
 
+    public static bool SetTargetImeOpen(IntPtr topWindow, bool open)
+    {
+        IntPtr result;
+        IntPtr transport = SendMessageTimeoutW(
+            topWindow,
+            WM_WICI_SET_IME_OPEN,
+            open ? (UIntPtr)1 : UIntPtr.Zero,
+            IntPtr.Zero,
+            SMTO_ABORTIFHUNG,
+            1000,
+            out result);
+        return transport != IntPtr.Zero && result != IntPtr.Zero;
+    }
+
     public static long QueryImeState(IntPtr topWindow)
     {
         IntPtr result;
@@ -178,6 +231,48 @@ public static class WiciImeHarness
         if (transport == IntPtr.Zero || result == IntPtr.Zero)
             throw new InvalidOperationException("Unable to query target-process IME state.");
         return result.ToInt64();
+    }
+
+    public static bool IsInputRoutedToEdit(IntPtr topWindow, IntPtr edit)
+    {
+        uint pid;
+        uint thread = GetWindowThreadProcessId(topWindow, out pid);
+        var info = new GUITHREADINFO
+        {
+            cbSize = (uint)Marshal.SizeOf<GUITHREADINFO>()
+        };
+        if (!GetGUIThreadInfo(thread, ref info))
+            return false;
+
+        return GetForegroundWindow() == topWindow &&
+               info.hwndActive == topWindow &&
+               info.hwndFocus == edit;
+    }
+
+    public static string GetInputRoutingEvidence(IntPtr topWindow, IntPtr edit)
+    {
+        uint pid;
+        uint thread = GetWindowThreadProcessId(topWindow, out pid);
+        var info = new GUITHREADINFO
+        {
+            cbSize = (uint)Marshal.SizeOf<GUITHREADINFO>()
+        };
+        if (!GetGUIThreadInfo(thread, ref info))
+        {
+            return "thread=" + thread +
+                   ", GetGUIThreadInfo=false, win32=" + Marshal.GetLastWin32Error() +
+                   ", foreground=" + GetForegroundWindow().ToInt64() +
+                   ", targetTop=" + topWindow.ToInt64() +
+                   ", targetEdit=" + edit.ToInt64();
+        }
+
+        return "thread=" + thread +
+               ", foreground=" + GetForegroundWindow().ToInt64() +
+               ", active=" + info.hwndActive.ToInt64() +
+               ", focus=" + info.hwndFocus.ToInt64() +
+               ", caret=" + info.hwndCaret.ToInt64() +
+               ", targetTop=" + topWindow.ToInt64() +
+               ", targetEdit=" + edit.ToInt64();
     }
 
     public static bool SetImeMode(IntPtr edit, bool open, int conversion)
@@ -356,14 +451,27 @@ function Focus-TestHost {
         throw "Unable to foreground the native test host."
     }
 
-    Start-Sleep -Milliseconds 120
+    try {
+        Wait-Until -Label "native test-host EDIT keyboard focus" -TimeoutMs 2000 -Condition {
+            [WiciImeHarness]::IsInputRoutedToEdit(
+                $Window,
+                $script:edit)
+        }
+    }
+    catch {
+        $routing = [WiciImeHarness]::GetInputRoutingEvidence(
+            $Window,
+            $script:edit)
+        throw "Native test-host focus routing mismatch. $routing"
+    }
 }
 
 function Clear-Edit {
-    [WiciImeHarness]::KeyDown(0x11) # Ctrl
-    [WiciImeHarness]::Key(0x41)     # A
-    [WiciImeHarness]::KeyUp(0x11)
-    [WiciImeHarness]::Key(0x08)     # Backspace
+    if (-not [WiciImeHarness]::SetWindowTextW(
+            $script:edit,
+            "")) {
+        throw "Unable to reset native EDIT text."
+    }
 
     Wait-Until -Label "empty edit control" -Condition {
         [WiciImeHarness]::GetText($script:edit).Length -eq 0
@@ -385,6 +493,59 @@ function Type-ScanCodes {
     foreach ($scanCode in $ScanCodes) {
         [WiciImeHarness]::ScanKey($scanCode)
         Start-Sleep -Milliseconds 20
+    }
+}
+
+function Test-TextContains {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Needle,
+        [int]$TimeoutMs = 1500
+    )
+
+    $watch = [Diagnostics.Stopwatch]::StartNew()
+    do {
+        if ([WiciImeHarness]::GetText(
+                $script:edit).Contains($Needle)) {
+            return $true
+        }
+        Start-Sleep -Milliseconds 50
+    } while ($watch.ElapsedMilliseconds -lt $TimeoutMs)
+
+    return $false
+}
+
+function Type-InputPath {
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateSet("ScanCode", "VirtualKey")]
+        [string]$Path,
+        [Parameter(Mandatory = $true)]
+        [ushort[]]$VirtualKeys,
+        [Parameter(Mandatory = $true)]
+        [ushort[]]$ScanCodes
+    )
+
+    if ($Path -eq "ScanCode") {
+        Type-ScanCodes -ScanCodes $ScanCodes
+    }
+    else {
+        Type-Keys -VirtualKeys $VirtualKeys
+    }
+}
+
+function Commit-InputPath {
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateSet("ScanCode", "VirtualKey")]
+        [string]$Path
+    )
+
+    if ($Path -eq "ScanCode") {
+        [WiciImeHarness]::ScanKey(0x39)
+    }
+    else {
+        [WiciImeHarness]::Key(0x20)
     }
 }
 
@@ -416,6 +577,50 @@ try {
 
     Focus-TestHost -Window $window
 
+    if (-not [WiciImeHarness]::SetTargetImeOpen(
+            $window,
+            $false)) {
+        throw "Unable to place target test-host IME in English/alphanumeric baseline mode."
+    }
+
+    Wait-Until -Label "target-process English baseline" -Condition {
+        (Get-TargetImeState -Window $window).mode -eq "English"
+    }
+
+    $targetEnglishBaseline = Get-TargetImeState -Window $window
+    $englishBaselineProbe = Invoke-Probe
+    if ($englishBaselineProbe.ime.languageId -ne "0x0412" -or
+        $englishBaselineProbe.ime.mode -ne "English") {
+        throw "English baseline target/product mismatch. Target=$($targetEnglishBaseline | ConvertTo-Json -Compress) Probe=$($englishBaselineProbe | ConvertTo-Json -Compress -Depth 8)"
+    }
+
+    Clear-Edit
+    Focus-TestHost -Window $window
+    Type-ScanCodes -ScanCodes @(0x1E, 0x30, 0x2E)
+    if (Test-TextContains -Needle "abc") {
+        $inputPath = "ScanCode"
+    }
+    else {
+        $scanFailureText = [WiciImeHarness]::GetText($edit)
+        Clear-Edit
+        Focus-TestHost -Window $window
+        Type-Keys -VirtualKeys @(0x41, 0x42, 0x43)
+        if (-not (Test-TextContains -Needle "abc")) {
+            $virtualFailureText = [WiciImeHarness]::GetText($edit)
+            $routing = [WiciImeHarness]::GetInputRoutingEvidence(
+                $window,
+                $edit)
+            throw "Keyboard SendInput delivery failed in English baseline for both scan-code and virtual-key paths. ScanText='$scanFailureText'. VirtualText='$virtualFailureText'. Routing=$routing"
+        }
+
+        $inputPath = "VirtualKey"
+        Write-Host "English input baseline: scan-code path unavailable on this runner; virtual-key SendInput reached the focused EDIT. Continuing actual IME validation with VirtualKey path."
+    }
+
+    Write-Host "English input baseline PASS: inputPath=$inputPath, target=$($targetEnglishBaseline | ConvertTo-Json -Compress)"
+    Clear-Edit
+    Focus-TestHost -Window $window
+
     if (-not [WiciImeHarness]::InitializeKoreanIme($window)) {
         throw "Unable to initialize Korean IME inside the target test-host thread."
     }
@@ -441,8 +646,8 @@ try {
 
     Focus-TestHost -Window $window
     $beforeKoreanText = [WiciImeHarness]::GetText($edit)
-    Type-ScanCodes -ScanCodes @(0x22, 0x25, 0x1F) # physical G K S -> 한 on 2-set Korean layout
-    [WiciImeHarness]::Key(0x20)                 # commit composition with space
+    Type-InputPath -Path $inputPath -VirtualKeys @(0x47, 0x4B, 0x53) -ScanCodes @(0x22, 0x25, 0x1F)
+    Commit-InputPath -Path $inputPath
 
     try {
         Wait-Until -Label "actual Hangul text" -Condition {
@@ -453,7 +658,10 @@ try {
     catch {
         $failedText = [WiciImeHarness]::GetText($edit)
         $failedProbe = Invoke-Probe
-        throw "Actual Hangul input failed. Text='$failedText'. Probe=$($failedProbe | ConvertTo-Json -Compress -Depth 8)"
+        $routing = [WiciImeHarness]::GetInputRoutingEvidence(
+            $window,
+            $edit)
+        throw "Actual Hangul input failed. InputPath=$inputPath. Text='$failedText'. Routing=$routing. Probe=$($failedProbe | ConvertTo-Json -Compress -Depth 8)"
     }
 
     $koreanText = [WiciImeHarness]::GetText($edit)
@@ -474,10 +682,10 @@ try {
         throw "English-after-Hangul-key probe mismatch. Target=$($targetEnglish | ConvertTo-Json -Compress) Probe=$($englishProbe | ConvertTo-Json -Compress -Depth 8)"
     }
 
+    Clear-Edit
     Focus-TestHost -Window $window
     $beforeEnglishText = [WiciImeHarness]::GetText($edit)
-    Type-ScanCodes -ScanCodes @(0x1E, 0x30, 0x2E) # physical A B C
-    [WiciImeHarness]::Key(0x20)
+    Type-InputPath -Path $inputPath -VirtualKeys @(0x41, 0x42, 0x43) -ScanCodes @(0x1E, 0x30, 0x2E)
 
     try {
         Wait-Until -Label "actual English text" -Condition {
@@ -488,7 +696,10 @@ try {
     catch {
         $failedText = [WiciImeHarness]::GetText($edit)
         $failedProbe = Invoke-Probe
-        throw "Actual English input failed. Text='$failedText'. Probe=$($failedProbe | ConvertTo-Json -Compress -Depth 8)"
+        $routing = [WiciImeHarness]::GetInputRoutingEvidence(
+            $window,
+            $edit)
+        throw "Actual English input failed. InputPath=$inputPath. Text='$failedText'. Routing=$routing. Probe=$($failedProbe | ConvertTo-Json -Compress -Depth 8)"
     }
 
     $englishText = [WiciImeHarness]::GetText($edit)
