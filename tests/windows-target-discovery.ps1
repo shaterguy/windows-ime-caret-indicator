@@ -78,9 +78,6 @@ public static class WiciTargetDiscoveryNative
 
     public static bool ClickWindowCenter(IntPtr hwnd)
     {
-        const uint MOUSEEVENTF_LEFTDOWN = 0x0002;
-        const uint MOUSEEVENTF_LEFTUP = 0x0004;
-
         if (!GetWindowRect(hwnd, out var rect))
             return false;
 
