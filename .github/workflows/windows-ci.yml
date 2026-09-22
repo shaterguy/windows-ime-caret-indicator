@@ -229,10 +229,13 @@ jobs:
           $text = $text.Replace('-Name "WindowsImeCaretIndicator" -Value $originalRunValue', '-Name "WindowsImeCaretIndicator.ProgramFiles" -Value $originalRunValue')
           $text = $text.Replace('-Name "WindowsImeCaretIndicator" -ErrorAction SilentlyContinue', '-Name "WindowsImeCaretIndicator.ProgramFiles" -ErrorAction SilentlyContinue')
           $text = $text.Replace('    Write-TestSettings -StartWithWindows $true -Paused $false -Path $settingsPath', '    Write-Host "WICI_RUNTIME_STAGE=bootstrap"; Write-TestSettings -StartWithWindows $true -Paused $false -Path $settingsPath')
-          $text = $text.Replace('    $product = Start-Process -FilePath $ExecutablePath -PassThru', '    Write-Host "WICI_RUNTIME_STAGE=start-product"; $product = Start-Process -FilePath $ExecutablePath -PassThru')
+          $text = $text.Replace('    $hostProcess = Start-Process -FilePath $ExecutablePath -ArgumentList "--test-host" -PassThru', '    Write-Host "WICI_RUNTIME_STAGE=start-test-host"; $hostProcess = Start-WiciRestrictedMediumProcess -FilePath $ExecutablePath -ArgumentList @("--test-host") -Role "test-host"')
+          $text = $text.Replace('    $product = Start-Process -FilePath $ExecutablePath -PassThru', '    Write-Host "WICI_RUNTIME_STAGE=start-product"; $product = Start-WiciRestrictedMediumProcess -FilePath $ExecutablePath -Role "product"')
+          $text = $text.Replace('    $secondary = Start-Process -FilePath $ExecutablePath -PassThru', '    Write-Host "WICI_RUNTIME_STAGE=start-secondary"; $secondary = Start-WiciRestrictedMediumProcess -FilePath $ExecutablePath -Role "secondary"')
           $text = $text.Replace('    $responsiveness = Measure-OverlayResponseLatency -Product $product -Shell $shell -SampleCount 20', '    Write-Host "WICI_RUNTIME_STAGE=latency"; $responsiveness = Measure-OverlayResponseLatency -Product $product -Shell $shell -SampleCount 20')
           $text = $text.Replace('    $soak = Invoke-CaretSoak -Product $product -Shell $shell -DurationSeconds 180', '    Write-Host "WICI_RUNTIME_STAGE=soak"; $soak = Invoke-CaretSoak -Product $product -Shell $shell -DurationSeconds 180; Write-Host "WICI_RUNTIME_STAGE=soak-done"')
           $text = $text.Replace('    $trayPause = Invoke-TrayMenuAction -Product $product -Shell $shell -Action "FirstEnabled"', '    Write-Host "WICI_RUNTIME_STAGE=tray-lifecycle"; $trayPause = Invoke-TrayMenuAction -Product $product -Shell $shell -Action "FirstEnabled"')
+          $text = '. "validation-harness/tests/run-medium-runtime-quality.ps1"' + [Environment]::NewLine + $text
           Set-Content -LiteralPath $path -Value $text -Encoding UTF8
 
       - name: Validate v0.1.1 candidate overlay runtime quality as normal user integrity
@@ -241,16 +244,17 @@ jobs:
         run: |
           $exe = Resolve-Path "${env:ProgramFiles}\Windows IME Caret Indicator\WindowsImeCaretIndicator.exe"
           $runtimeScript = Resolve-Path "tests/runtime-quality-smoke.ps1"
-          ./validation-harness/tests/run-medium-runtime-quality.ps1 -ExecutablePath $exe.Path -RuntimeScriptPath $runtimeScript.Path
+          Write-Host "WICI_RUNTIME_STAGE=high-harness-start"
+          & $runtimeScript.Path -ExecutablePath $exe.Path
 
-      - name: Print runtime-quality diagnostic log
+      - name: Report runtime-quality evidence presence
         if: ${{ always() && !startsWith(github.event.head_commit.message, 'security:') }}
         shell: pwsh
         run: |
-          if (Test-Path "artifacts/runtime-quality-medium.log") {
-            Get-Content "artifacts/runtime-quality-medium.log"
+          if (Test-Path "artifacts/runtime-quality.json") {
+            Write-Host "runtime-quality.json was created by the high-context harness."
           } else {
-            Write-Host "runtime-quality-medium.log was not created."
+            Write-Host "runtime-quality.json was not created before failure."
           }
 
       - name: Upload released runtime-quality evidence

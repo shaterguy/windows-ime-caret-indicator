@@ -141,6 +141,13 @@ public static class WiciRestrictedMediumRunner
         string stringSid,
         out IntPtr sid);
 
+    [DllImport("advapi32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CheckTokenMembership(
+        IntPtr tokenHandle,
+        IntPtr sidToCheck,
+        out bool isMember);
+
     [DllImport("advapi32.dll")]
     private static extern int GetLengthSid(IntPtr sid);
 
@@ -181,11 +188,10 @@ public static class WiciRestrictedMediumRunner
     [DllImport("kernel32.dll")]
     private static extern IntPtr LocalFree(IntPtr memory);
 
-    public static WiciMediumRunResult Run(
+    public static WiciMediumRunResult Start(
         string applicationName,
         string commandLine,
-        string currentDirectory,
-        int timeoutMilliseconds)
+        string currentDirectory)
     {
         IntPtr sourceToken = IntPtr.Zero;
         IntPtr primaryToken = IntPtr.Zero;
@@ -257,6 +263,21 @@ public static class WiciRestrictedMediumRunner
 
             SetMediumIntegrity(restrictedToken);
 
+            if (!CheckTokenMembership(
+                    restrictedToken,
+                    adminSid,
+                    out var isAdminMember))
+            {
+                throw new Win32Exception(
+                    Marshal.GetLastWin32Error(),
+                    "CheckTokenMembership failed.");
+            }
+            if (isAdminMember)
+            {
+                throw new InvalidOperationException(
+                    "Restricted token still has Administrators SID enabled.");
+            }
+
             var startup = new STARTUPINFO
             {
                 cb = Marshal.SizeOf<STARTUPINFO>(),
@@ -283,33 +304,11 @@ public static class WiciRestrictedMediumRunner
             try
             {
                 var rid = GetIntegrityRid(created.hProcess);
-                var wait = WaitForSingleObject(
-                    created.hProcess,
-                    (uint)timeoutMilliseconds);
-                if (wait == WAIT_TIMEOUT)
-                {
-                    TerminateProcess(created.hProcess, 1223);
-                    throw new TimeoutException(
-                        "Restricted medium runtime-quality process timed out.");
-                }
-                if (wait != WAIT_OBJECT_0)
-                {
-                    throw new Win32Exception(
-                        Marshal.GetLastWin32Error(),
-                        "WaitForSingleObject failed.");
-                }
-                if (!GetExitCodeProcess(created.hProcess, out var exitCode))
-                {
-                    throw new Win32Exception(
-                        Marshal.GetLastWin32Error(),
-                        "GetExitCodeProcess failed.");
-                }
-
                 return new WiciMediumRunResult
                 {
                     ProcessId = (int)created.dwProcessId,
                     IntegrityRid = rid,
-                    ExitCode = (int)exitCode
+                    ExitCode = 0
                 };
             }
             finally
@@ -446,66 +445,43 @@ public static class WiciRestrictedMediumRunner
 }
 "@
 
-$ExecutablePath = (Resolve-Path $ExecutablePath).Path
-$RuntimeScriptPath = (Resolve-Path $RuntimeScriptPath).Path
-$artifactsDir = Join-Path (Get-Location) "artifacts"
-New-Item -ItemType Directory -Path $artifactsDir -Force | Out-Null
-$childLog = Join-Path $artifactsDir "runtime-quality-medium.log"
-$childWrapper = Join-Path $artifactsDir "runtime-quality-child.ps1"
-Remove-Item -LiteralPath $childLog -Force -ErrorAction SilentlyContinue
+function Start-WiciRestrictedMediumProcess {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$FilePath,
+        [string[]]$ArgumentList = @(),
+        [string]$Role = "runtime"
+    )
 
-@'
-param(
-    [Parameter(Mandatory = $true)]
-    [string]$RuntimeScriptPath,
-    [Parameter(Mandatory = $true)]
-    [string]$ExecutablePath,
-    [Parameter(Mandatory = $true)]
-    [string]$LogPath
-)
-$ErrorActionPreference = "Stop"
-try {
-    & $RuntimeScriptPath -ExecutablePath $ExecutablePath *>&1 |
-        Tee-Object -FilePath $LogPath
-    exit 0
-}
-catch {
-    $_ | Out-String | Tee-Object -FilePath $LogPath -Append
-    exit 1
-}
-'@ | Set-Content -LiteralPath $childWrapper -Encoding UTF8
+    $resolved = (Resolve-Path -LiteralPath $FilePath).Path
+    $commandLine = '"' + $resolved + '"'
+    foreach ($argument in $ArgumentList) {
+        if ($argument.Contains('"')) {
+            throw "Unsupported quote character in restricted-process argument."
+        }
+        if ($argument -match '\s') {
+            $commandLine += ' "' + $argument + '"'
+        }
+        else {
+            $commandLine += ' ' + $argument
+        }
+    }
 
-$pwsh = Join-Path $PSHOME "pwsh.exe"
-$commandLine = (
-    '"' + $pwsh +
-    '" -NoLogo -NoProfile -ExecutionPolicy Bypass -File "' +
-    $childWrapper +
-    '" -RuntimeScriptPath "' +
-    $RuntimeScriptPath +
-    '" -ExecutablePath "' +
-    $ExecutablePath +
-    '" -LogPath "' +
-    $childLog +
-    '"'
-)
+    $result = [WiciRestrictedMediumRunner]::Start(
+        $resolved,
+        $commandLine,
+        (Get-Location).Path)
 
-$result = [WiciRestrictedMediumRunner]::Run(
-    $pwsh,
-    $commandLine,
-    (Get-Location).Path,
-    480000)
+    if ($result.IntegrityRid -lt 0x2000 -or
+        $result.IntegrityRid -ge 0x3000) {
+        throw "Restricted process '$Role' did not start at Medium integrity."
+    }
 
-Write-Host (
-    "WICI_RESTRICTED_MEDIUM_RUNTIME_QUALITY pid={0} integrityRid={1} exitCode={2}" -f
-    $result.ProcessId,
-    $result.IntegrityRid,
-    $result.ExitCode)
+    Write-Host (
+        "WICI_RESTRICTED_MEDIUM_PROCESS role={0} pid={1} integrityRid={2}" -f
+        $Role,
+        $result.ProcessId,
+        $result.IntegrityRid)
 
-if ($result.IntegrityRid -lt 0x2000 -or
-    $result.IntegrityRid -ge 0x3000) {
-    throw "Runtime-quality harness did not run at Medium integrity."
-}
-
-if ($result.ExitCode -ne 0) {
-    exit $result.ExitCode
+    return [System.Diagnostics.Process]::GetProcessById($result.ProcessId)
 }
