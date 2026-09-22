@@ -20,12 +20,12 @@ public sealed class WiciMediumRunResult
     public int ExitCode { get; set; }
 }
 
-public static class WiciMediumRunner
+public static class WiciRestrictedMediumRunner
 {
     private const uint TOKEN_DUPLICATE = 0x0002;
     private const uint TOKEN_QUERY = 0x0008;
-    private const uint TOKEN_ADJUST_DEFAULT = 0x0080;
     private const uint MAXIMUM_ALLOWED = 0x02000000;
+    private const uint DISABLE_MAX_PRIVILEGE = 0x00000001;
     private const int TokenIntegrityLevel = 25;
     private const uint SE_GROUP_INTEGRITY = 0x00000020;
     private const int SecurityImpersonation = 2;
@@ -116,6 +116,19 @@ public static class WiciMediumRunner
 
     [DllImport("advapi32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CreateRestrictedToken(
+        IntPtr existingTokenHandle,
+        uint flags,
+        uint disableSidCount,
+        IntPtr sidsToDisable,
+        uint deletePrivilegeCount,
+        IntPtr privilegesToDelete,
+        uint restrictedSidCount,
+        IntPtr sidsToRestrict,
+        out IntPtr newTokenHandle);
+
+    [DllImport("advapi32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool SetTokenInformation(
         IntPtr tokenHandle,
         int tokenInformationClass,
@@ -175,7 +188,11 @@ public static class WiciMediumRunner
         int timeoutMilliseconds)
     {
         IntPtr sourceToken = IntPtr.Zero;
-        IntPtr launchToken = IntPtr.Zero;
+        IntPtr primaryToken = IntPtr.Zero;
+        IntPtr restrictedToken = IntPtr.Zero;
+        IntPtr adminSid = IntPtr.Zero;
+        IntPtr disableSidBuffer = IntPtr.Zero;
+
         if (!OpenProcessToken(
                 GetCurrentProcess(),
                 TOKEN_QUERY | TOKEN_DUPLICATE,
@@ -194,14 +211,51 @@ public static class WiciMediumRunner
                     IntPtr.Zero,
                     SecurityImpersonation,
                     TokenPrimary,
-                    out launchToken))
+                    out primaryToken))
             {
                 throw new Win32Exception(
                     Marshal.GetLastWin32Error(),
                     "DuplicateTokenEx failed.");
             }
 
-            SetMediumIntegrity(launchToken);
+            if (!ConvertStringSidToSidW(
+                    "S-1-5-32-544",
+                    out adminSid))
+            {
+                throw new Win32Exception(
+                    Marshal.GetLastWin32Error(),
+                    "ConvertStringSidToSidW(Administrators) failed.");
+            }
+
+            var adminDisable = new SID_AND_ATTRIBUTES
+            {
+                Sid = adminSid,
+                Attributes = 0
+            };
+            disableSidBuffer = Marshal.AllocHGlobal(
+                Marshal.SizeOf<SID_AND_ATTRIBUTES>());
+            Marshal.StructureToPtr(
+                adminDisable,
+                disableSidBuffer,
+                false);
+
+            if (!CreateRestrictedToken(
+                    primaryToken,
+                    DISABLE_MAX_PRIVILEGE,
+                    1,
+                    disableSidBuffer,
+                    0,
+                    IntPtr.Zero,
+                    0,
+                    IntPtr.Zero,
+                    out restrictedToken))
+            {
+                throw new Win32Exception(
+                    Marshal.GetLastWin32Error(),
+                    "CreateRestrictedToken failed.");
+            }
+
+            SetMediumIntegrity(restrictedToken);
 
             var startup = new STARTUPINFO
             {
@@ -211,7 +265,7 @@ public static class WiciMediumRunner
             var mutableCommandLine = new StringBuilder(commandLine);
 
             if (!CreateProcessWithTokenW(
-                    launchToken,
+                    restrictedToken,
                     0,
                     applicationName,
                     mutableCommandLine,
@@ -236,7 +290,7 @@ public static class WiciMediumRunner
                 {
                     TerminateProcess(created.hProcess, 1223);
                     throw new TimeoutException(
-                        "Medium-integrity runtime-quality process timed out.");
+                        "Restricted medium runtime-quality process timed out.");
                 }
                 if (wait != WAIT_OBJECT_0)
                 {
@@ -266,8 +320,14 @@ public static class WiciMediumRunner
         }
         finally
         {
-            if (launchToken != IntPtr.Zero)
-                CloseHandle(launchToken);
+            if (disableSidBuffer != IntPtr.Zero)
+                Marshal.FreeHGlobal(disableSidBuffer);
+            if (adminSid != IntPtr.Zero)
+                LocalFree(adminSid);
+            if (restrictedToken != IntPtr.Zero)
+                CloseHandle(restrictedToken);
+            if (primaryToken != IntPtr.Zero)
+                CloseHandle(primaryToken);
             if (sourceToken != IntPtr.Zero)
                 CloseHandle(sourceToken);
         }
@@ -341,7 +401,7 @@ public static class WiciMediumRunner
         {
             throw new Win32Exception(
                 Marshal.GetLastWin32Error(),
-                "ConvertStringSidToSidW failed.");
+                "ConvertStringSidToSidW(Medium) failed.");
         }
 
         try
@@ -388,20 +448,37 @@ public static class WiciMediumRunner
 
 $ExecutablePath = (Resolve-Path $ExecutablePath).Path
 $RuntimeScriptPath = (Resolve-Path $RuntimeScriptPath).Path
+$artifactsDir = Join-Path (Get-Location) "artifacts"
+New-Item -ItemType Directory -Path $artifactsDir -Force | Out-Null
+$childLog = Join-Path $artifactsDir "runtime-quality-medium.log"
+Remove-Item -LiteralPath $childLog -Force -ErrorAction SilentlyContinue
+
 $pwsh = Join-Path $PSHOME "pwsh.exe"
 $commandLine = (
-    '"' + $pwsh + '" -NoLogo -NoProfile -ExecutionPolicy Bypass -File "' +
-    $RuntimeScriptPath + '" -ExecutablePath "' + $ExecutablePath + '"'
+    '"' + $env:ComSpec +
+    '" /d /s /c ""' +
+    $pwsh +
+    '" -NoLogo -NoProfile -ExecutionPolicy Bypass -File "' +
+    $RuntimeScriptPath +
+    '" -ExecutablePath "' +
+    $ExecutablePath +
+    '" > "' +
+    $childLog +
+    '" 2>&1"'
 )
 
-$result = [WiciMediumRunner]::Run(
-    $pwsh,
+$result = [WiciRestrictedMediumRunner]::Run(
+    $env:ComSpec,
     $commandLine,
     (Get-Location).Path,
     1200000)
 
+if (Test-Path -LiteralPath $childLog) {
+    Get-Content -LiteralPath $childLog | Write-Host
+}
+
 Write-Host (
-    "WICI_MEDIUM_RUNTIME_QUALITY pid={0} integrityRid={1} exitCode={2}" -f
+    "WICI_RESTRICTED_MEDIUM_RUNTIME_QUALITY pid={0} integrityRid={1} exitCode={2}" -f
     $result.ProcessId,
     $result.IntegrityRid,
     $result.ExitCode)
