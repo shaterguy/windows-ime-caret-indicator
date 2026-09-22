@@ -451,31 +451,49 @@ $RuntimeScriptPath = (Resolve-Path $RuntimeScriptPath).Path
 $artifactsDir = Join-Path (Get-Location) "artifacts"
 New-Item -ItemType Directory -Path $artifactsDir -Force | Out-Null
 $childLog = Join-Path $artifactsDir "runtime-quality-medium.log"
+$childWrapper = Join-Path $artifactsDir "runtime-quality-child.ps1"
 Remove-Item -LiteralPath $childLog -Force -ErrorAction SilentlyContinue
+
+@'
+param(
+    [Parameter(Mandatory = $true)]
+    [string]$RuntimeScriptPath,
+    [Parameter(Mandatory = $true)]
+    [string]$ExecutablePath,
+    [Parameter(Mandatory = $true)]
+    [string]$LogPath
+)
+$ErrorActionPreference = "Stop"
+try {
+    & $RuntimeScriptPath -ExecutablePath $ExecutablePath *>&1 |
+        Tee-Object -FilePath $LogPath
+    exit 0
+}
+catch {
+    $_ | Out-String | Tee-Object -FilePath $LogPath -Append
+    exit 1
+}
+'@ | Set-Content -LiteralPath $childWrapper -Encoding UTF8
 
 $pwsh = Join-Path $PSHOME "pwsh.exe"
 $commandLine = (
-    '"' + $env:ComSpec +
-    '" /d /s /c ""' +
-    $pwsh +
+    '"' + $pwsh +
     '" -NoLogo -NoProfile -ExecutionPolicy Bypass -File "' +
+    $childWrapper +
+    '" -RuntimeScriptPath "' +
     $RuntimeScriptPath +
     '" -ExecutablePath "' +
     $ExecutablePath +
-    '" > "' +
+    '" -LogPath "' +
     $childLog +
-    '" 2>&1"'
+    '"'
 )
 
 $result = [WiciRestrictedMediumRunner]::Run(
-    $env:ComSpec,
+    $pwsh,
     $commandLine,
     (Get-Location).Path,
-    1200000)
-
-if (Test-Path -LiteralPath $childLog) {
-    Get-Content -LiteralPath $childLog | Write-Host
-}
+    480000)
 
 Write-Host (
     "WICI_RESTRICTED_MEDIUM_RUNTIME_QUALITY pid={0} integrityRid={1} exitCode={2}" -f
