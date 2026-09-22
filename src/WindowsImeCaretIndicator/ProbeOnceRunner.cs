@@ -53,7 +53,7 @@ internal static class ProbeOnceRunner
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool CloseHandle(IntPtr handle);
 
-    internal static int Run(string? outputPath = null)
+    internal static int Run()
     {
         var process = ReadCurrentProcessSecurity();
 
@@ -72,7 +72,6 @@ internal static class ProbeOnceRunner
                         process,
                         at = DateTimeOffset.UtcNow
                     },
-                    outputPath,
                     3);
             }
 
@@ -102,8 +101,7 @@ internal static class ProbeOnceRunner
                     },
                     at = DateTimeOffset.UtcNow
                 },
-                outputPath,
-                0);
+                    0);
         }
         catch (Exception ex)
         {
@@ -120,27 +118,15 @@ internal static class ProbeOnceRunner
                     },
                     at = DateTimeOffset.UtcNow
                 },
-                outputPath,
-                4);
+                    4);
         }
     }
 
     private static int Emit(
         object value,
-        string? outputPath,
         int exitCode)
     {
         var json = JsonSerializer.Serialize(value);
-
-        if (!string.IsNullOrWhiteSpace(outputPath))
-        {
-            var fullPath = Path.GetFullPath(outputPath);
-            var directory = Path.GetDirectoryName(fullPath);
-            if (!string.IsNullOrWhiteSpace(directory))
-                Directory.CreateDirectory(directory);
-            File.WriteAllText(fullPath, json);
-        }
-
         Console.WriteLine(json);
         return exitCode;
     }

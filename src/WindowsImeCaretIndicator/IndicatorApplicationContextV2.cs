@@ -8,6 +8,8 @@ internal sealed class IndicatorApplicationContextV2 : ApplicationContext
     private readonly TextPattern2Bridge _caretResolver = new();
     private readonly ImeStateReader _imeStateReader = new();
     private readonly AppSettings _settings;
+    private readonly bool _isElevated;
+    private readonly bool _persistUserState;
     private readonly NotifyIcon _trayIcon;
     private readonly ToolStripMenuItem _pauseItem;
     private readonly ToolStripMenuItem _resumeItem;
@@ -22,8 +24,18 @@ internal sealed class IndicatorApplicationContextV2 : ApplicationContext
 
     internal IndicatorApplicationContextV2()
     {
-        _settings = AppSettings.Load();
+        _isElevated = ElevationSupport.IsElevated;
+        _persistUserState = !_isElevated;
+        _settings = _persistUserState
+            ? AppSettings.Load()
+            : new AppSettings
+            {
+                StartWithWindows = false,
+                Paused = false
+            };
         _paused = _settings.Paused;
+        var canRestartElevated =
+            !_isElevated && ElevationSupport.CanRestartElevated;
 
         _pauseItem = new ToolStripMenuItem(
             "표시 일시 정지",
@@ -42,22 +54,28 @@ internal sealed class IndicatorApplicationContextV2 : ApplicationContext
         };
 
         _elevateItem = new ToolStripMenuItem(
-            ElevationSupport.IsElevated
+            _isElevated
                 ? "관리자 권한으로 실행 중"
-                : "관리자 권한으로 다시 시작",
+                : canRestartElevated
+                    ? "관리자 권한으로 다시 시작"
+                    : "관리자 권한 지원은 설치본에서 사용 가능",
             null,
             (_, _) => RestartElevated())
         {
-            Enabled = !ElevationSupport.IsElevated
+            Enabled = canRestartElevated
         };
 
         _startupItem = new ToolStripMenuItem(
-            "Windows 시작 시 자동 실행",
+            _persistUserState
+                ? "Windows 시작 시 자동 실행"
+                : "Windows 시작 시 자동 실행 (일반 실행에서 설정)",
             null,
             (_, _) => ToggleStartup())
         {
             CheckOnClick = false,
-            Checked = StartupRegistration.IsRegistered()
+            Checked = _persistUserState &&
+                      StartupRegistration.IsRegistered(),
+            Enabled = _persistUserState
         };
 
         var menu = new ContextMenuStrip();
@@ -121,15 +139,19 @@ internal sealed class IndicatorApplicationContextV2 : ApplicationContext
             _uiaTextEvents = null;
         }
 
-        try
+        if (_persistUserState)
         {
-            StartupRegistration.Apply(_settings.StartWithWindows);
-            _startupItem.Checked =
-                StartupRegistration.IsRegistered();
-        }
-        catch
-        {
-            _startupItem.Checked = false;
+            try
+            {
+                StartupRegistration.Apply(
+                    _settings.StartWithWindows);
+                _startupItem.Checked =
+                    StartupRegistration.IsRegistered();
+            }
+            catch
+            {
+                _startupItem.Checked = false;
+            }
         }
 
         RequestRefresh();
@@ -202,12 +224,15 @@ internal sealed class IndicatorApplicationContextV2 : ApplicationContext
     {
         _paused = paused;
         _settings.Paused = paused;
-        try
+        if (_persistUserState)
         {
-            _settings.Save();
-        }
-        catch
-        {
+            try
+            {
+                _settings.Save();
+            }
+            catch
+            {
+            }
         }
         _pauseItem.Visible = !paused;
         _resumeItem.Visible = paused;
@@ -220,7 +245,7 @@ internal sealed class IndicatorApplicationContextV2 : ApplicationContext
 
     private void RestartElevated()
     {
-        if (_disposed || ElevationSupport.IsElevated)
+        if (_disposed || _isElevated)
             return;
 
         if (ElevationSupport.TryRestartElevated())
@@ -229,6 +254,9 @@ internal sealed class IndicatorApplicationContextV2 : ApplicationContext
 
     private void ToggleStartup()
     {
+        if (!_persistUserState)
+            return;
+
         var target = !_startupItem.Checked;
 
         try

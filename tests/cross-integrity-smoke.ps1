@@ -656,10 +656,12 @@ try {
 
     $commandLine = (
         '"' +
+        $env:ComSpec +
+        '" /d /s /c ""' +
         $ExecutablePath +
-        '" --probe-once-file "' +
+        '" --probe-once > "' +
         $mediumOutputPath +
-        '"'
+        '" 2>&1"'
     )
 
     $launchKind = $null
@@ -677,7 +679,7 @@ try {
 
     $launch = [WiciIntegrityNative]::LaunchWithProcessToken(
         $sourcePid,
-        $ExecutablePath,
+        $env:ComSpec,
         $commandLine,
         (Get-Location).Path,
         $lowerToMedium,

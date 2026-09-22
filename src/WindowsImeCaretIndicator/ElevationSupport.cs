@@ -81,6 +81,65 @@ internal static class ElevationSupport
         }
     }
 
+    internal static bool CanRestartElevated
+    {
+        get
+        {
+            if (IsElevated)
+                return false;
+
+            var executable = Environment.ProcessPath;
+            return !string.IsNullOrWhiteSpace(executable) &&
+                   IsProtectedElevationTarget(executable);
+        }
+    }
+
+    internal static bool IsProtectedElevationTarget(
+        string executable)
+    {
+        if (string.IsNullOrWhiteSpace(executable))
+            return false;
+
+        try
+        {
+            var fullPath = Path.GetFullPath(executable);
+            var programFiles = new[]
+            {
+                Environment.GetFolderPath(
+                    Environment.SpecialFolder.ProgramFiles),
+                Environment.GetFolderPath(
+                    Environment.SpecialFolder.ProgramFilesX86)
+            };
+
+            return programFiles.Any(
+                directory => IsUnderDirectory(
+                    fullPath,
+                    directory));
+        }
+        catch (Exception ex) when (
+            ex is ArgumentException or
+            NotSupportedException or
+            PathTooLongException)
+        {
+            return false;
+        }
+    }
+
+    private static bool IsUnderDirectory(
+        string fullPath,
+        string directory)
+    {
+        if (string.IsNullOrWhiteSpace(directory))
+            return false;
+
+        var root = Path.TrimEndingDirectorySeparator(
+            Path.GetFullPath(directory));
+        var prefix = root + Path.DirectorySeparatorChar;
+        return fullPath.StartsWith(
+            prefix,
+            StringComparison.OrdinalIgnoreCase);
+    }
+
     internal static ProcessStartInfo CreateRestartStartInfo(
         string executable) =>
         new()
@@ -97,8 +156,11 @@ internal static class ElevationSupport
             return false;
 
         var executable = Environment.ProcessPath;
-        if (string.IsNullOrWhiteSpace(executable))
+        if (string.IsNullOrWhiteSpace(executable) ||
+            !IsProtectedElevationTarget(executable))
+        {
             return false;
+        }
 
         try
         {

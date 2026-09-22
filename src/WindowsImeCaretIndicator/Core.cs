@@ -240,6 +240,33 @@ internal static class SelfTests
             Equal("--wait-for-instance", info.Arguments);
         }, errors);
 
+        Check("Program Files elevation target is accepted", () =>
+        {
+            var programFiles = Environment.GetFolderPath(
+                Environment.SpecialFolder.ProgramFiles);
+            if (string.IsNullOrWhiteSpace(programFiles))
+                throw new InvalidOperationException(
+                    "Program Files path is unavailable.");
+
+            var target = Path.Combine(
+                programFiles,
+                "Windows IME Caret Indicator",
+                "WindowsImeCaretIndicator.exe");
+            Equal(
+                true,
+                ElevationSupport.IsProtectedElevationTarget(target));
+        }, errors);
+
+        Check("user-writable elevation target is rejected", () =>
+        {
+            var target = Path.Combine(
+                Path.GetTempPath(),
+                "WindowsImeCaretIndicator.exe");
+            Equal(
+                false,
+                ElevationSupport.IsProtectedElevationTarget(target));
+        }, errors);
+
         Check("single instance lease excludes a second thread", () =>
         {
             var name = @"Local\WiciSelfTest-" + Guid.NewGuid().ToString("N");
@@ -265,7 +292,7 @@ internal static class SelfTests
         foreach (var error in errors)
             Console.Error.WriteLine(error);
 
-        const int total = 21;
+        const int total = 23;
         Console.WriteLine($"{total - errors.Count}/{total} tests passed.");
         return errors.Count == 0 ? 0 : 1;
     }

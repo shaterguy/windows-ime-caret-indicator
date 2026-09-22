@@ -37,24 +37,6 @@ internal static class ProgramV2
             return NativeTestHost.Run();
         }
 
-        var probeFileIndex = Array.FindIndex(
-            args,
-            value => string.Equals(
-                value,
-                "--probe-once-file",
-                StringComparison.OrdinalIgnoreCase));
-
-        if (probeFileIndex >= 0)
-        {
-            if (probeFileIndex + 1 >= args.Length ||
-                string.IsNullOrWhiteSpace(args[probeFileIndex + 1]))
-            {
-                return 5;
-            }
-
-            return ProbeOnceRunner.Run(args[probeFileIndex + 1]);
-        }
-
         if (args.Contains(
                 "--probe-once",
                 StringComparer.OrdinalIgnoreCase))
