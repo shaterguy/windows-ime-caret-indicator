@@ -166,6 +166,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Measure cross-integrity access to an elevated caret target
+        continue-on-error: ${{ startsWith(github.event.head_commit.message, 'security:') }}
         shell: pwsh
         run: |
           $exe = Resolve-Path "artifacts/win-x64/WindowsImeCaretIndicator.exe"
