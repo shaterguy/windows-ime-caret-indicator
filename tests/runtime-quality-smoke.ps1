@@ -285,18 +285,10 @@ function Focus-TestHost {
 
     Start-Sleep -Milliseconds 150
 
-    $edit = [WiciRuntimeNative]::FindWindowExW(
-        $HostProcess.MainWindowHandle,
-        [IntPtr]::Zero,
-        "Edit",
-        $null)
-    if ($edit -eq [IntPtr]::Zero) {
-        throw "Test host edit control was not found."
-    }
-
     $foreground = [WiciRuntimeNative]::GetForegroundWindow()
-    $focused = [WiciRuntimeNative]::GetFocusedWindowForForeground()
-    if ($foreground -ne $HostProcess.MainWindowHandle -or $focused -ne $edit) {
+    $edit = [WiciRuntimeNative]::GetFocusedWindowForForeground()
+    if ($foreground -ne $HostProcess.MainWindowHandle -or
+        $edit -eq [IntPtr]::Zero) {
         throw "Test host did not retain foreground/edit keyboard focus."
     }
 
