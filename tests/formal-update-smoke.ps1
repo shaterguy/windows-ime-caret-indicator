@@ -10,7 +10,7 @@ $ErrorActionPreference = "Stop"
 $legacyInstaller = (Resolve-Path $LegacyInstallerPath).Path
 $candidateInstaller = (Resolve-Path $CandidateInstallerPath).Path
 $testUser = "WiciMig" + [Guid]::NewGuid().ToString("N").Substring(0, 8)
-$testPassword = "W1ci!Migration-" + [Guid]::NewGuid().ToString("N").Substring(0, 12)
+$testPassword = "W1ci!" + [Guid]::NewGuid().ToString("N").Substring(0, 8)
 $publicDocuments = Join-Path $env:PUBLIC "Documents"
 $testRoot = Join-Path $publicDocuments ("WiciFormalUpdate-" + [Guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $testRoot -Force | Out-Null
