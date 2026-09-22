@@ -107,6 +107,10 @@ public static class WiciRuntimeNative
     public static extern IntPtr GetForegroundWindow();
 
     [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool SetForegroundWindow(IntPtr hwnd);
+
+    [DllImport("user32.dll")]
     private static extern bool GetGUIThreadInfo(uint threadId, ref GUITHREADINFO info);
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
@@ -252,9 +256,26 @@ public static class WiciRuntimeNative
 
     public static void SendKey(byte virtualKey)
     {
+        const uint KEYEVENTF_EXTENDEDKEY = 0x0001;
         const uint KEYEVENTF_KEYUP = 0x0002;
-        keybd_event(virtualKey, 0, 0, UIntPtr.Zero);
-        keybd_event(virtualKey, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+        var extended =
+            virtualKey == 0x21 ||
+            virtualKey == 0x22 ||
+            virtualKey == 0x23 ||
+            virtualKey == 0x24 ||
+            virtualKey == 0x25 ||
+            virtualKey == 0x26 ||
+            virtualKey == 0x27 ||
+            virtualKey == 0x28 ||
+            virtualKey == 0x2D ||
+            virtualKey == 0x2E;
+        var flags = extended ? KEYEVENTF_EXTENDEDKEY : 0u;
+        keybd_event(virtualKey, 0, flags, UIntPtr.Zero);
+        keybd_event(
+            virtualKey,
+            0,
+            flags | KEYEVENTF_KEYUP,
+            UIntPtr.Zero);
     }
 
     public static WiciRectSnapshot FindNotifyIconRect(int pid)
@@ -689,12 +710,51 @@ function Invoke-TrayMenuAction {
         throw "Unable to locate the product notification-area icon."
     }
 
+    $visibleBeforeOpen = @(Get-VisibleProductWindows -Product $Product)
+    $existingHandles = @(
+        $visibleBeforeOpen |
+            ForEach-Object { [int64]$_.Handle }
+    )
+
     $x = [Math]::Floor(($rect.Left + $rect.Right) / 2)
     $y = [Math]::Floor(($rect.Top + $rect.Bottom) / 2)
     [WiciRuntimeNative]::RightClick($x, $y)
-    Start-Sleep -Milliseconds 250
 
-    $visibleAfterOpen = @(Get-VisibleProductWindows -Product $Product)
+    $visibleAfterOpen = @()
+    $popup = $null
+    for ($i = 0; $i -lt 30; $i++) {
+        $visibleAfterOpen = @(Get-VisibleProductWindows -Product $Product)
+        $popup = $visibleAfterOpen |
+            Where-Object {
+                $existingHandles -notcontains [int64]$_.Handle
+            } |
+            Select-Object -First 1
+        if ($null -ne $popup) {
+            break
+        }
+        Start-Sleep -Milliseconds 50
+    }
+
+    if ($null -eq $popup) {
+        $beforeSummary = $visibleBeforeOpen |
+            Select-Object Handle, ClassName, Title
+        $afterSummary = $visibleAfterOpen |
+            Select-Object Handle, ClassName, Title
+        throw (
+            "Tray right-click did not expose a new product popup window. " +
+            "before=" +
+            ($beforeSummary | ConvertTo-Json -Compress) +
+            " after=" +
+            ($afterSummary | ConvertTo-Json -Compress))
+    }
+
+    if (-not [WiciRuntimeNative]::SetForegroundWindow(
+            [IntPtr]([int64]$popup.Handle))) {
+        throw (
+            "Unable to foreground the tray popup window handle " +
+            "$($popup.Handle).")
+    }
+    Start-Sleep -Milliseconds 100
 
     switch ($Action) {
         "FirstEnabled" {
@@ -725,8 +785,16 @@ function Invoke-TrayMenuAction {
             right = $rect.Right
             bottom = $rect.Bottom
         }
+        visibleProductWindowsBeforeOpen = $visibleBeforeOpen.Count
         visibleProductWindowsAfterOpen = $visibleAfterOpen.Count
+        popup = [ordered]@{
+            handle = $popup.Handle
+            className = $popup.ClassName
+            title = $popup.Title
+        }
         physicalRightClick = $true
+        popupWindowObserved = $true
+        popupForegrounded = $true
         keyboardNavigation = $true
     }
 }
