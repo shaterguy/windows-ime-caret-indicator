@@ -160,11 +160,11 @@ jobs:
         shell: pwsh
         run: |
           $exe = Resolve-Path "artifacts/win-x64/WindowsImeCaretIndicator.exe"
-          $host = Get-ChildItem "tests/WebView2CaretHost/bin/Release" -Recurse -Filter "WebView2CaretHost.exe" | Select-Object -First 1
-          if (-not $host) {
+          $webView2Host = Get-ChildItem "tests/WebView2CaretHost/bin/Release" -Recurse -Filter "WebView2CaretHost.exe" | Select-Object -First 1
+          if (-not $webView2Host) {
             throw "WebView2 caret test host executable was not produced."
           }
-          ./tests/cross-integrity-smoke.ps1 -ExecutablePath $exe.Path -WebView2HostPath $host.FullName
+          ./tests/cross-integrity-smoke.ps1 -ExecutablePath $exe.Path -WebView2HostPath $webView2Host.FullName
 
       - name: Upload cross-integrity evidence
         if: always()
