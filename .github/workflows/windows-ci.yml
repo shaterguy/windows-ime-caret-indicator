@@ -30,6 +30,16 @@ jobs:
       - name: Build debug runtime
         run: dotnet build src/WindowsImeCaretIndicator/WindowsImeCaretIndicator.csproj -c Debug --no-restore
 
+      - name: Restore and build WebView2 caret test host
+        shell: pwsh
+        run: |
+          dotnet restore tests/WebView2CaretHost/WebView2CaretHost.csproj
+          dotnet build tests/WebView2CaretHost/WebView2CaretHost.csproj -c Release --no-restore
+
+      - name: Install VS Code Electron target
+        shell: pwsh
+        run: choco install vscode -y --no-progress
+
       - name: Run deterministic self tests
         shell: pwsh
         run: |
@@ -88,15 +98,6 @@ jobs:
           }
           ./tests/korean-ime-smoke.ps1 -ExecutablePath $exe.FullName
 
-      - name: Discover mandatory Windows target environments
-        shell: pwsh
-        run: |
-          $exe = Get-ChildItem "src/WindowsImeCaretIndicator/bin/Debug" -Recurse -Filter "WindowsImeCaretIndicator.exe" | Select-Object -First 1
-          if (-not $exe) {
-            throw "Debug executable was not produced."
-          }
-          ./tests/windows-target-discovery.ps1 -ExecutablePath $exe.FullName
-
       - name: Download immutable v0.1.0 portable for runtime validation
         shell: pwsh
         run: |
@@ -109,6 +110,19 @@ jobs:
             throw "Immutable v0.1.0 portable checksum mismatch: $hash"
           }
           Write-Host "Validated immutable v0.1.0 portable: $hash"
+
+      - name: Discover mandatory Windows target environments against immutable release
+        shell: pwsh
+        run: |
+          $exe = Resolve-Path "artifacts/released-v0.1.0/WindowsImeCaretIndicator.exe"
+          ./tests/windows-target-discovery.ps1 -ExecutablePath $exe.Path
+
+      - name: Upload Windows target discovery evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: WICI-target-discovery-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/runtime-target-discovery.json
+          if-no-files-found: error
 
       - name: Validate released overlay runtime quality
         shell: pwsh

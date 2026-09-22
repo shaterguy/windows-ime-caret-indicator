@@ -301,7 +301,7 @@ function Focus-FirstEditableDescendant {
     }
 }
 
-function Focus-NamedDescendantForRename {
+function Start-ExplorerRenameAttempt {
     param(
         [Parameter(Mandatory = $true)]
         [System.Diagnostics.Process]$Process,
@@ -415,6 +415,7 @@ function Focus-NamedDescendantForRename {
                 Start-Sleep -Milliseconds 150
                 $Shell.SendKeys("^a")
                 Start-Sleep -Milliseconds 150
+                $preRenameFocus = Get-FocusedControlSnapshot
             }
             catch {
                 return [ordered]@{
@@ -426,19 +427,15 @@ function Focus-NamedDescendantForRename {
         }
 
         $Shell.SendKeys("{F2}")
-        $focused = Wait-FocusedEdit -Attempts 40
-
-        if (Test-EditableFocusSnapshot -Snapshot $focused) {
-            return [ordered]@{
-                success = $true
-                focused = $focused
-            }
-        }
+        Start-Sleep -Milliseconds 300
+        $postF2Focus = Get-FocusedControlSnapshot
 
         return [ordered]@{
-            success = $false
-            reason = "F2 did not place keyboard focus in an Explorer rename edit."
-            focused = $focused
+            success = $true
+            preRenameFocus = $preRenameFocus
+            focused = $postF2Focus
+            patternBasedEditable = (Test-EditableFocusSnapshot -Snapshot $postF2Focus)
+            evidence = "F2 dispatched to independently selected temporary file; actual rename will be proven by keyboard edit plus filesystem commit."
         }
     }
     catch {
@@ -592,14 +589,63 @@ function Test-ExplorerRename {
         }
 
         $shell = Activate-Process -Process $process
-        $focusResult = Focus-NamedDescendantForRename -Process $process -Name $fileName -Shell $shell
+        $renameAttempt = Start-ExplorerRenameAttempt -Process $process -Name $fileName -Shell $shell
+        if (-not $renameAttempt.success) {
+            return [ordered]@{
+                status = "HARNESS_FOCUS_UNAVAILABLE"
+                process = $process.ProcessName
+                renameAttempt = $renameAttempt
+            }
+        }
 
-        $classified = Classify-FocusedProbe -FocusResult $focusResult
+        $renameToken = "wici-rename-" + [Guid]::NewGuid().ToString("N").Substring(0, 8)
+        $shell.SendKeys("^a")
+        Start-Sleep -Milliseconds 100
+        $shell.SendKeys($renameToken)
+        Start-Sleep -Milliseconds 250
+
+        $focusDuringRename = Get-FocusedControlSnapshot
+        $probe = Invoke-CaretProbe
+
+        $shell.SendKeys("{ENTER}")
+
+        $renamed = $null
+        for ($i = 0; $i -lt 30; $i++) {
+            $renamed = Get-ChildItem -LiteralPath $folder -File -ErrorAction SilentlyContinue |
+                Where-Object {
+                    $_.Name -ne $fileName -and
+                    ($_.Name -like "$renameToken*" -or $_.BaseName -eq $renameToken)
+                } |
+                Select-Object -First 1
+            if ($renamed) {
+                break
+            }
+            Start-Sleep -Milliseconds 100
+        }
+
+        if (-not $renamed) {
+            return [ordered]@{
+                status = "HARNESS_RENAME_UNPROVEN"
+                process = $process.ProcessName
+                renameAttempt = $renameAttempt
+                focusDuringRename = $focusDuringRename
+                probe = $probe
+                reason = "Keyboard edit was not committed as a filesystem rename, so the probe is not classified as product evidence."
+            }
+        }
+
+        $active = $probe.parseable -eq $true -and
+            $probe.payload.activeCaret -eq $true
+
         return [ordered]@{
-            status = $classified.status
+            status = $(if ($active) { "PROBED" } else { "PRODUCT_CARET_GAP" })
             process = $process.ProcessName
-            focus = $classified.focus
-            probe = $classified.probe
+            renameConfirmed = $true
+            originalName = $fileName
+            committedName = $renamed.Name
+            renameAttempt = $renameAttempt
+            focusDuringRename = $focusDuringRename
+            probe = $probe
         }
     }
     catch {
@@ -620,6 +666,263 @@ function Test-ExplorerRename {
         }
         Close-ProcessSafely -Process $process
         Remove-Item -LiteralPath $folder -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Get-WebView2RuntimeRegistration {
+    $clientId = "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
+    if ([Environment]::Is64BitOperatingSystem) {
+        $paths = @(
+            "HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\$clientId",
+            "HKCU:\Software\Microsoft\EdgeUpdate\Clients\$clientId"
+        )
+    }
+    else {
+        $paths = @(
+            "HKLM:\SOFTWARE\Microsoft\EdgeUpdate\Clients\$clientId",
+            "HKCU:\Software\Microsoft\EdgeUpdate\Clients\$clientId"
+        )
+    }
+
+    $registrations = @()
+    foreach ($path in $paths) {
+        try {
+            $pv = (Get-ItemProperty -LiteralPath $path -Name "pv" -ErrorAction Stop).pv
+            if (-not [string]::IsNullOrWhiteSpace($pv) -and $pv -ne "0.0.0.0") {
+                $registrations += [ordered]@{
+                    registryPath = $path
+                    version = [string]$pv
+                }
+            }
+        }
+        catch {
+        }
+    }
+
+    return [ordered]@{
+        installed = $registrations.Count -gt 0
+        registrations = @($registrations)
+        detection = "Microsoft-documented EdgeUpdate Clients pv registry contract"
+    }
+}
+
+function Test-VscodeEditor {
+    param([string]$VscodePath)
+
+    if ([string]::IsNullOrWhiteSpace($VscodePath) -or -not (Test-Path $VscodePath)) {
+        return [ordered]@{
+            status = "TARGET_UNAVAILABLE"
+            reason = "VS Code executable was not available."
+        }
+    }
+
+    $folder = Join-Path $env:TEMP ("WiciVscodeProbe-" + [Guid]::NewGuid().ToString("N"))
+    $file = Join-Path $folder "vscode-probe.txt"
+    $userData = Join-Path $folder "user-data"
+    $extensions = Join-Path $folder "extensions"
+    $process = $null
+    $shell = $null
+    $startedAt = [DateTime]::UtcNow
+    $marker = "wicielectronproof"
+
+    try {
+        New-Item -ItemType Directory -Path $folder -Force | Out-Null
+        Set-Content -LiteralPath $file -Value "initial" -Encoding UTF8
+
+        Start-Process -FilePath $VscodePath -ArgumentList @(
+            "--new-window",
+            "--disable-extensions",
+            "--skip-welcome",
+            "--user-data-dir=$userData",
+            "--extensions-dir=$extensions",
+            $file
+        ) | Out-Null
+
+        for ($i = 0; $i -lt 120; $i++) {
+            $process = Get-Process -Name "Code" -ErrorAction SilentlyContinue |
+                Where-Object { $_.MainWindowHandle -ne 0 } |
+                Sort-Object StartTime -Descending |
+                Select-Object -First 1
+            if ($process) {
+                break
+            }
+            Start-Sleep -Milliseconds 100
+        }
+
+        if (-not $process) {
+            return [ordered]@{
+                status = "HARNESS_FOCUS_UNAVAILABLE"
+                reason = "VS Code did not expose an interactive main window."
+            }
+        }
+
+        $shell = Activate-Process -Process $process
+        Start-Sleep -Milliseconds 400
+        $shell.SendKeys("^a")
+        Start-Sleep -Milliseconds 100
+        $shell.SendKeys($marker)
+        Start-Sleep -Milliseconds 300
+
+        $focusDuringEdit = Get-FocusedControlSnapshot
+        $probe = Invoke-CaretProbe
+
+        $shell.SendKeys("^s")
+        $saved = $false
+        for ($i = 0; $i -lt 40; $i++) {
+            try {
+                $content = (Get-Content -LiteralPath $file -Raw -ErrorAction Stop).Trim()
+                if ($content -eq $marker) {
+                    $saved = $true
+                    break
+                }
+            }
+            catch {
+            }
+            Start-Sleep -Milliseconds 100
+        }
+
+        if (-not $saved) {
+            return [ordered]@{
+                status = "HARNESS_EDIT_UNPROVEN"
+                process = $process.ProcessName
+                focusDuringEdit = $focusDuringEdit
+                probe = $probe
+                reason = "Keyboard editing could not be independently proven by saving the marker to the opened file."
+            }
+        }
+
+        $active = $probe.parseable -eq $true -and
+            $probe.payload.activeCaret -eq $true
+
+        return [ordered]@{
+            status = $(if ($active) { "PROBED" } else { "PRODUCT_CARET_GAP" })
+            process = $process.ProcessName
+            version = (& $VscodePath --version 2>$null | Select-Object -First 1)
+            editConfirmed = $true
+            focusDuringEdit = $focusDuringEdit
+            probe = $probe
+        }
+    }
+    catch {
+        return [ordered]@{
+            status = "HARNESS_ERROR"
+            error = $_.Exception.Message
+            focused = (Get-FocusedControlSnapshot)
+        }
+    }
+    finally {
+        if ($null -ne $shell) {
+            [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell)
+        }
+
+        Get-Process -Name "Code" -ErrorAction SilentlyContinue | ForEach-Object {
+            try {
+                if ($_.StartTime.ToUniversalTime() -ge $startedAt.AddSeconds(-2)) {
+                    Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+                }
+            }
+            catch {
+            }
+        }
+        Remove-Item -LiteralPath $folder -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Test-WebView2Host {
+    param([string]$HostPath)
+
+    if ([string]::IsNullOrWhiteSpace($HostPath) -or -not (Test-Path $HostPath)) {
+        return [ordered]@{
+            status = "TARGET_UNAVAILABLE"
+            reason = "WebView2 test host executable was not built."
+        }
+    }
+
+    $process = $null
+    $shell = $null
+    $marker = "wiciwebviewproof"
+
+    try {
+        $process = Start-Process -FilePath $HostPath -PassThru
+        if (-not (Wait-MainWindow -Process $process -Attempts 100)) {
+            return [ordered]@{
+                status = "HARNESS_FOCUS_UNAVAILABLE"
+                reason = "WebView2 test host did not expose a main window."
+            }
+        }
+
+        $ready = $false
+        for ($i = 0; $i -lt 120; $i++) {
+            $process.Refresh()
+            if ($process.HasExited) {
+                break
+            }
+            if ($process.MainWindowTitle -like "*Ready*") {
+                $ready = $true
+                break
+            }
+            Start-Sleep -Milliseconds 100
+        }
+
+        if (-not $ready) {
+            return [ordered]@{
+                status = "TARGET_UNAVAILABLE"
+                reason = "WebView2 runtime host did not reach DOM-ready state."
+                title = $process.MainWindowTitle
+            }
+        }
+
+        $shell = Activate-Process -Process $process
+        Start-Sleep -Milliseconds 250
+        $shell.SendKeys($marker)
+
+        $editConfirmed = $false
+        for ($i = 0; $i -lt 40; $i++) {
+            $process.Refresh()
+            if ($process.MainWindowTitle -like "*Input=$marker*") {
+                $editConfirmed = $true
+                break
+            }
+            Start-Sleep -Milliseconds 100
+        }
+
+        $focusDuringEdit = Get-FocusedControlSnapshot
+        $probe = Invoke-CaretProbe
+
+        if (-not $editConfirmed) {
+            return [ordered]@{
+                status = "HARNESS_EDIT_UNPROVEN"
+                process = $process.ProcessName
+                title = $process.MainWindowTitle
+                focusDuringEdit = $focusDuringEdit
+                probe = $probe
+                reason = "WebView2 DOM input did not echo the keyboard marker through host web messaging."
+            }
+        }
+
+        $active = $probe.parseable -eq $true -and
+            $probe.payload.activeCaret -eq $true
+
+        return [ordered]@{
+            status = $(if ($active) { "PROBED" } else { "PRODUCT_CARET_GAP" })
+            process = $process.ProcessName
+            editConfirmed = $true
+            focusDuringEdit = $focusDuringEdit
+            probe = $probe
+        }
+    }
+    catch {
+        return [ordered]@{
+            status = "HARNESS_ERROR"
+            error = $_.Exception.Message
+            focused = (Get-FocusedControlSnapshot)
+        }
+    }
+    finally {
+        if ($null -ne $shell) {
+            [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell)
+        }
+        Close-ProcessSafely -Process $process
     }
 }
 
@@ -669,6 +972,15 @@ foreach ($root in $officeRoots) {
 }
 
 $os = Get-CimInstance Win32_OperatingSystem
+$webView2Registration = Get-WebView2RuntimeRegistration
+$vscodePath = Find-Executable -Candidates @(
+    (Join-Path $programFiles "Microsoft VS Code\Code.exe"),
+    (Join-Path $localAppData "Programs\Microsoft VS Code\Code.exe")
+)
+$webView2HostPath = Get-ChildItem "tests\WebView2CaretHost\bin\Release" -Recurse -Filter "WebView2CaretHost.exe" -ErrorAction SilentlyContinue |
+    Select-Object -First 1 |
+    ForEach-Object { $_.FullName }
+
 $results = [ordered]@{
     timestampUtc = [DateTimeOffset]::UtcNow.ToString("O")
     os = [ordered]@{
@@ -687,19 +999,16 @@ $results = [ordered]@{
         word = (Find-Executable -Candidates $wordCandidates)
         excel = (Find-Executable -Candidates $excelCandidates)
         outlook = (Find-Executable -Candidates $outlookCandidates)
-        vscode = (Find-Executable -Candidates @(
-            (Join-Path $programFiles "Microsoft VS Code\Code.exe"),
-            (Join-Path $localAppData "Programs\Microsoft VS Code\Code.exe")
-        ))
-        webView2Runtime = (Find-Executable -Candidates @(
-            (Join-Path $programFilesX86 "Microsoft\EdgeWebView\Application\msedgewebview2.exe"),
-            (Join-Path $programFiles "Microsoft\EdgeWebView\Application\msedgewebview2.exe")
-        ))
+        vscode = $vscodePath
+        webView2Runtime = $webView2Registration
+        webView2Host = $webView2HostPath
     }
     probes = [ordered]@{
         notepad = (Test-Notepad)
         settingsSearch = (Test-SettingsSearch)
         explorerRename = (Test-ExplorerRename)
+        vscodeElectron = (Test-VscodeEditor -VscodePath $vscodePath)
+        webView2 = (Test-WebView2Host -HostPath $webView2HostPath)
     }
 }
 
