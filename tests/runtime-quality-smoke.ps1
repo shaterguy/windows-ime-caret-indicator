@@ -62,8 +62,28 @@ public static class WiciRuntimeNative
         public RECT rcCaret;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NOTIFYICONIDENTIFIER
+    {
+        public uint cbSize;
+        public IntPtr hWnd;
+        public uint uID;
+        public Guid guidItem;
+    }
+
     [DllImport("user32.dll")]
     private static extern bool EnumWindows(EnumWindowsProc callback, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    private static extern bool EnumChildWindows(
+        IntPtr parent,
+        EnumWindowsProc callback,
+        IntPtr lParam);
+
+    [DllImport("shell32.dll")]
+    private static extern int Shell_NotifyIconGetRect(
+        ref NOTIFYICONIDENTIFIER identifier,
+        out RECT iconLocation);
 
     [DllImport("user32.dll")]
     private static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint processId);
@@ -211,6 +231,65 @@ public static class WiciRuntimeNative
             throw new InvalidOperationException("SetCursorPos failed.");
         mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, UIntPtr.Zero);
         mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, UIntPtr.Zero);
+    }
+
+    public static void RightClick(int x, int y)
+    {
+        const uint MOUSEEVENTF_RIGHTDOWN = 0x0008;
+        const uint MOUSEEVENTF_RIGHTUP = 0x0010;
+        if (!SetCursorPos(x, y))
+            throw new InvalidOperationException("SetCursorPos failed.");
+        mouse_event(MOUSEEVENTF_RIGHTDOWN, 0, 0, 0, UIntPtr.Zero);
+        mouse_event(MOUSEEVENTF_RIGHTUP, 0, 0, 0, UIntPtr.Zero);
+    }
+
+    public static WiciRectSnapshot FindNotifyIconRect(int pid)
+    {
+        var windows = new HashSet<IntPtr>();
+        EnumWindows((hwnd, _) =>
+        {
+            GetWindowThreadProcessId(hwnd, out var ownerPid);
+            if (ownerPid == (uint)pid)
+                windows.Add(hwnd);
+            return true;
+        }, IntPtr.Zero);
+
+        var hwndMessage = new IntPtr(-3);
+        EnumChildWindows(hwndMessage, (hwnd, _) =>
+        {
+            GetWindowThreadProcessId(hwnd, out var ownerPid);
+            if (ownerPid == (uint)pid)
+                windows.Add(hwnd);
+            return true;
+        }, IntPtr.Zero);
+
+        foreach (var hwnd in windows)
+        {
+            for (uint id = 0; id <= 64; id++)
+            {
+                var identifier = new NOTIFYICONIDENTIFIER
+                {
+                    cbSize = (uint)Marshal.SizeOf<NOTIFYICONIDENTIFIER>(),
+                    hWnd = hwnd,
+                    uID = id,
+                    guidItem = Guid.Empty
+                };
+                if (Shell_NotifyIconGetRect(ref identifier, out var rect) == 0 &&
+                    rect.Right > rect.Left &&
+                    rect.Bottom > rect.Top)
+                {
+                    return new WiciRectSnapshot
+                    {
+                        Left = rect.Left,
+                        Top = rect.Top,
+                        Right = rect.Right,
+                        Bottom = rect.Bottom
+                    };
+                }
+            }
+        }
+
+        return null;
     }
 }
 "@
@@ -547,6 +626,206 @@ function Wait-RunRegistration {
     throw "Startup registration did not reach the expected state."
 }
 
+function Wait-SettingsState {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+        [Parameter(Mandatory = $true)]
+        [bool]$StartWithWindows,
+        [Parameter(Mandatory = $true)]
+        [bool]$Paused
+    )
+
+    for ($i = 0; $i -lt 30; $i++) {
+        try {
+            if (Test-Path $Path) {
+                $settings = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+                if ([bool]$settings.StartWithWindows -eq $StartWithWindows -and
+                    [bool]$settings.Paused -eq $Paused) {
+                    return $settings
+                }
+            }
+        }
+        catch {
+        }
+        Start-Sleep -Milliseconds 100
+    }
+
+    throw "Settings did not reach StartWithWindows=$StartWithWindows Paused=$Paused."
+}
+
+function Invoke-TrayMenuItem {
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Diagnostics.Process]$Product,
+        [Parameter(Mandatory = $true)]
+        [string]$Name
+    )
+
+    $Product.Refresh()
+    if ($Product.HasExited) {
+        throw "Product exited before tray action '$Name'."
+    }
+
+    $rect = [WiciRuntimeNative]::FindNotifyIconRect($Product.Id)
+    if ($null -eq $rect) {
+        throw "Unable to locate the product notification-area icon."
+    }
+
+    $x = [Math]::Floor(($rect.Left + $rect.Right) / 2)
+    $y = [Math]::Floor(($rect.Top + $rect.Bottom) / 2)
+    [WiciRuntimeNative]::RightClick($x, $y)
+
+    $item = $null
+    for ($i = 0; $i -lt 30; $i++) {
+        $nameCondition = [System.Windows.Automation.PropertyCondition]::new(
+            [System.Windows.Automation.AutomationElement]::NameProperty,
+            $Name)
+        $processCondition = [System.Windows.Automation.PropertyCondition]::new(
+            [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
+            $Product.Id)
+        $condition = [System.Windows.Automation.AndCondition]::new(
+            @($nameCondition, $processCondition))
+        $item = [System.Windows.Automation.AutomationElement]::RootElement.FindFirst(
+            [System.Windows.Automation.TreeScope]::Descendants,
+            $condition)
+        if ($null -ne $item) {
+            break
+        }
+        Start-Sleep -Milliseconds 100
+    }
+
+    if ($null -eq $item) {
+        throw "Tray menu item '$Name' was not exposed through UI Automation."
+    }
+
+    $invoked = $false
+    try {
+        $rawInvoke = $null
+        if ($item.TryGetCurrentPattern(
+                [System.Windows.Automation.InvokePattern]::Pattern,
+                [ref]$rawInvoke)) {
+            ([System.Windows.Automation.InvokePattern]$rawInvoke).Invoke()
+            $invoked = $true
+        }
+    }
+    catch {
+    }
+
+    if (-not $invoked) {
+        try {
+            $rawLegacy = $null
+            if ($item.TryGetCurrentPattern(
+                    [System.Windows.Automation.LegacyIAccessiblePattern]::Pattern,
+                    [ref]$rawLegacy)) {
+                ([System.Windows.Automation.LegacyIAccessiblePattern]$rawLegacy).DoDefaultAction()
+                $invoked = $true
+            }
+        }
+        catch {
+        }
+    }
+
+    if (-not $invoked) {
+        throw "Tray menu item '$Name' did not support an invokable accessibility pattern."
+    }
+
+    Start-Sleep -Milliseconds 150
+    return [ordered]@{
+        name = $Name
+        iconRect = [ordered]@{
+            left = $rect.Left
+            top = $rect.Top
+            right = $rect.Right
+            bottom = $rect.Bottom
+        }
+        invoked = $true
+    }
+}
+
+function Invoke-CaretSoak {
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Diagnostics.Process]$Product,
+        [Parameter(Mandatory = $true)]
+        [object]$Shell,
+        [int]$DurationSeconds = 180
+    )
+
+    $Product.Refresh()
+    $handlesBefore = $Product.HandleCount
+    $privateBefore = $Product.PrivateMemorySize64
+    $samples = @()
+    $moves = 0
+    $maxVisibleOverlays = 0
+    $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    $nextSampleSeconds = 30.0
+
+    while ($stopwatch.Elapsed.TotalSeconds -lt $DurationSeconds) {
+        if (($moves % 2) -eq 0) {
+            $Shell.SendKeys("{LEFT}")
+        }
+        else {
+            $Shell.SendKeys("{RIGHT}")
+        }
+        if (($moves % 100) -eq 0) {
+            $Shell.SendKeys("{END}")
+            $Shell.SendKeys("{HOME}")
+        }
+        $moves++
+
+        if ($stopwatch.Elapsed.TotalSeconds -ge $nextSampleSeconds) {
+            $Product.Refresh()
+            if ($Product.HasExited) {
+                throw "Product exited during the sustained caret-movement soak."
+            }
+            $windows = @(Get-VisibleProductWindows -Product $Product)
+            $maxVisibleOverlays = [Math]::Max($maxVisibleOverlays, $windows.Count)
+            if ($windows.Count -gt 1) {
+                throw "More than one visible overlay appeared during the soak."
+            }
+            $samples += [ordered]@{
+                elapsedSeconds = [Math]::Round($stopwatch.Elapsed.TotalSeconds, 2)
+                handles = $Product.HandleCount
+                privateMemoryBytes = $Product.PrivateMemorySize64
+                visibleOverlays = $windows.Count
+            }
+            $nextSampleSeconds += 30.0
+        }
+
+        Start-Sleep -Milliseconds 40
+    }
+
+    $stopwatch.Stop()
+    $Product.Refresh()
+    $windowsAfter = @(Get-VisibleProductWindows -Product $Product)
+    $maxVisibleOverlays = [Math]::Max($maxVisibleOverlays, $windowsAfter.Count)
+    if ($windowsAfter.Count -ne 1) {
+        throw "Visible overlay count after the sustained soak was $($windowsAfter.Count), expected 1."
+    }
+
+    $handleDelta = $Product.HandleCount - $handlesBefore
+    $privateDelta = $Product.PrivateMemorySize64 - $privateBefore
+    if ($handleDelta -gt 128) {
+        throw "Handle growth is suspicious after the sustained soak: +$handleDelta."
+    }
+    if ($privateDelta -gt 134217728) {
+        throw "Private-memory growth is suspicious after the sustained soak: +$privateDelta bytes."
+    }
+
+    return [ordered]@{
+        requestedDurationSeconds = $DurationSeconds
+        actualDurationSeconds = [Math]::Round($stopwatch.Elapsed.TotalSeconds, 2)
+        caretMoves = $moves
+        sampleIntervalSeconds = 30
+        samples = @($samples)
+        maxVisibleOverlays = $maxVisibleOverlays
+        finalVisibleOverlays = $windowsAfter.Count
+        handleDelta = $handleDelta
+        privateMemoryDeltaBytes = $privateDelta
+    }
+}
+
 function Save-OverlayEvidence {
     param(
         [Parameter(Mandatory = $true)]
@@ -804,6 +1083,9 @@ try {
         throw "Visible overlay count after stress was $($windowsAfterStress.Count), expected 1."
     }
 
+    $edit = Focus-TestHost -HostProcess $hostProcess -Shell $shell
+    $soak = Invoke-CaretSoak -Product $product -Shell $shell -DurationSeconds 180
+
     $work = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
     $targetX = $work.Right - 730
     $targetY = $work.Bottom - 170
@@ -865,6 +1147,7 @@ try {
         handleDelta = $handleDelta
         privateMemoryDeltaBytes = $privateDelta
         idleCpuSecondsOver3Seconds = [Math]::Round($idleCpuSeconds, 4)
+        sustainedSoak = $soak
     }
     $results.edgePlacement = [ordered]@{
         workingArea = [ordered]@{
@@ -915,6 +1198,38 @@ try {
     $null = Wait-RunRegistration -RunKey $runKey -ExpectedPresent $true -ExpectedPath $ExecutablePath
     $null = Wait-VisibleOverlay -Product $product
     $results.resumePersisted = $true
+
+    $trayPause = Invoke-TrayMenuItem -Product $product -Name "표시 일시 정지"
+    $null = Wait-SettingsState -Path $settingsPath -StartWithWindows $true -Paused $true
+    Assert-NoVisibleOverlay -Product $product
+
+    $trayResume = Invoke-TrayMenuItem -Product $product -Name "표시 재개"
+    $null = Wait-SettingsState -Path $settingsPath -StartWithWindows $true -Paused $false
+    $edit = Focus-TestHost -HostProcess $hostProcess -Shell $shell
+    $null = Wait-VisibleOverlay -Product $product
+
+    $trayStartupOff = Invoke-TrayMenuItem -Product $product -Name "Windows 시작 시 자동 실행"
+    $null = Wait-SettingsState -Path $settingsPath -StartWithWindows $false -Paused $false
+    $null = Wait-RunRegistration -RunKey $runKey -ExpectedPresent $false
+
+    $trayStartupOn = Invoke-TrayMenuItem -Product $product -Name "Windows 시작 시 자동 실행"
+    $null = Wait-SettingsState -Path $settingsPath -StartWithWindows $true -Paused $false
+    $null = Wait-RunRegistration -RunKey $runKey -ExpectedPresent $true -ExpectedPath $ExecutablePath
+
+    $trayExit = Invoke-TrayMenuItem -Product $product -Name "종료"
+    if (-not $product.WaitForExit(5000)) {
+        throw "Product did not exit after invoking the actual tray Exit menu item."
+    }
+    $results.trayLifecycle = [ordered]@{
+        pause = $trayPause
+        resume = $trayResume
+        startupOff = $trayStartupOff
+        startupOn = $trayStartupOn
+        exit = $trayExit
+        settingsAndRunRegistrationVerified = $true
+        processExited = $true
+    }
+    $product = $null
 
     $displayItems = @()
     foreach ($screen in [System.Windows.Forms.Screen]::AllScreens) {

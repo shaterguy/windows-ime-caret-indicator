@@ -13,7 +13,7 @@ permissions:
 jobs:
   build-test:
     runs-on: windows-latest
-    timeout-minutes: 25
+    timeout-minutes: 35
 
     steps:
       - name: Checkout
@@ -38,6 +38,25 @@ jobs:
         run: |
           dotnet restore tests/WebView2CaretHost/WebView2CaretHost.csproj
           dotnet build tests/WebView2CaretHost/WebView2CaretHost.csproj -c Release --no-restore
+
+      - name: Prepare pinned Electron runtime
+        shell: pwsh
+        run: |
+          $version = "44.4.3"
+          $zip = "artifacts/electron-v$version-win32-x64.zip"
+          $dir = "artifacts/electron"
+          New-Item -ItemType Directory -Path "artifacts" -Force | Out-Null
+          Invoke-WebRequest -Uri "https://github.com/electron/electron/releases/download/v$version/electron-v$version-win32-x64.zip" -OutFile $zip
+          $hash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($hash -ne "790a355b684d5c7cc8dc3cdd8c4cca7c4b2d054685427c7554a956879a82e70b") {
+            throw "Pinned Electron runtime checksum mismatch: $hash"
+          }
+          Expand-Archive -LiteralPath $zip -DestinationPath $dir -Force
+          $reported = (& "$dir/electron.exe" --version | Select-Object -First 1)
+          if ($reported -ne "v$version") {
+            throw "Pinned Electron runtime reported unexpected version '$reported'."
+          }
+          Write-Host "Validated Electron $reported with SHA256 $hash"
 
       - name: Install VS Code Electron target
         shell: pwsh
@@ -130,6 +149,7 @@ jobs:
           ./tests/windows-target-discovery.ps1 -ExecutablePath $exe.Path
 
       - name: Upload Windows target discovery evidence
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: WICI-target-discovery-${{ github.run_id }}-${{ github.run_attempt }}

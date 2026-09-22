@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>WICI Electron Caret Host</title>
+  <style>
+    body { font: 16px system-ui, sans-serif; padding: 24px; }
+    input, [contenteditable="true"] { width: 560px; min-height: 36px; margin: 12px 0; padding: 8px; border: 1px solid #777; }
+    [contenteditable="true"] { min-height: 80px; }
+  </style>
+</head>
+<body>
+  <label for="electron-input">Input</label><br>
+  <input id="electron-input" aria-label="WICI Electron Input" autocomplete="off">
+  <div id="electron-editable" role="textbox" aria-label="WICI Electron Contenteditable" contenteditable="true" tabindex="0"></div>
+  <script>
+    const input = document.getElementById("electron-input");
+    const editable = document.getElementById("electron-editable");
+
+    input.addEventListener("input", () => {
+      document.title = "WICI Electron Caret Host Ready input:" + input.value;
+    });
+    editable.addEventListener("input", () => {
+      document.title = "WICI Electron Caret Host Ready editable:" + editable.textContent;
+    });
+
+    window.addEventListener("DOMContentLoaded", () => {
+      document.title = "WICI Electron Caret Host Ready";
+      input.focus();
+    });
+  </script>
+</body>
+</html>

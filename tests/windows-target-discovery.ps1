@@ -399,6 +399,97 @@ function Focus-FirstEditableDescendant {
     }
 }
 
+function Focus-NamedDescendant {
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Diagnostics.Process]$Process,
+        [Parameter(Mandatory = $true)]
+        [string[]]$Names
+    )
+
+    try {
+        $Process.Refresh()
+        if ($Process.MainWindowHandle -eq 0) {
+            return [ordered]@{
+                success = $false
+                reason = "Process has no main window."
+            }
+        }
+
+        $root = [System.Windows.Automation.AutomationElement]::FromHandle(
+            $Process.MainWindowHandle)
+        if ($null -eq $root) {
+            return [ordered]@{
+                success = $false
+                reason = "UI Automation root was unavailable."
+            }
+        }
+
+        foreach ($name in $Names) {
+            $condition = [System.Windows.Automation.PropertyCondition]::new(
+                [System.Windows.Automation.AutomationElement]::NameProperty,
+                $name)
+            $element = $root.FindFirst(
+                [System.Windows.Automation.TreeScope]::Descendants,
+                $condition)
+            if ($null -eq $element) {
+                continue
+            }
+
+            try {
+                $selectionPattern = $null
+                if ($element.TryGetCurrentPattern(
+                        [System.Windows.Automation.SelectionItemPattern]::Pattern,
+                        [ref]$selectionPattern)) {
+                    ([System.Windows.Automation.SelectionItemPattern]$selectionPattern).Select()
+                }
+            }
+            catch {
+            }
+
+            try {
+                $element.SetFocus()
+            }
+            catch {
+            }
+
+            try {
+                $rect = $element.Current.BoundingRectangle
+                if (-not $rect.IsEmpty -and
+                    $rect.Width -gt 4 -and
+                    $rect.Height -gt 4) {
+                    [void][WiciTargetDiscoveryNative]::ClickPoint(
+                        [int][Math]::Round($rect.Left + ($rect.Width / 2)),
+                        [int][Math]::Round($rect.Top + ($rect.Height / 2)))
+                }
+            }
+            catch {
+            }
+
+            Start-Sleep -Milliseconds 200
+            return [ordered]@{
+                success = $true
+                matchedName = $name
+                focused = (Get-FocusedControlSnapshot)
+            }
+        }
+
+        return [ordered]@{
+            success = $false
+            reason = "No exact named descendant was found."
+            names = @($Names)
+            focused = (Get-FocusedControlSnapshot)
+        }
+    }
+    catch {
+        return [ordered]@{
+            success = $false
+            reason = $_.Exception.Message
+            focused = (Get-FocusedControlSnapshot)
+        }
+    }
+}
+
 function Start-ExplorerRenameAttempt {
     param(
         [Parameter(Mandatory = $true)]
@@ -433,13 +524,20 @@ function Start-ExplorerRenameAttempt {
 
         $preRenameFocus = Get-FocusedControlSnapshot
 
-        # The temporary directory contains exactly one test file. Selection and
-        # actual edit state are not inferred from UIA control type. Downstream
-        # code proves rename mode by committing a unique name and observing the
-        # filesystem change.
-        $Shell.SendKeys("^a")
-        Start-Sleep -Milliseconds 150
-        $selectedFocus = Get-FocusedControlSnapshot
+        # Select the exact fresh file element rather than relying on Explorer-wide
+        # Ctrl+A state. The filesystem rename remains the authoritative proof
+        # that a real rename editor accepted the keyboard input.
+        $selection = Focus-NamedDescendant -Process $Process -Names @(
+            $Name,
+            [IO.Path]::GetFileNameWithoutExtension($Name))
+        if (-not $selection.success) {
+            return [ordered]@{
+                success = $false
+                reason = "Explorer test file could not be selected by exact UI Automation name."
+                selection = $selection
+            }
+        }
+        $selectedFocus = $selection.focused
         $Shell.SendKeys("{F2}")
         Start-Sleep -Milliseconds 300
         $postF2Focus = Get-FocusedControlSnapshot
@@ -998,6 +1096,142 @@ function Test-VscodeEditor {
     }
 }
 
+function Test-ElectronHost {
+    param(
+        [string]$ElectronPath,
+        [string]$HostPath
+    )
+
+    if ([string]::IsNullOrWhiteSpace($ElectronPath) -or
+        -not (Test-Path $ElectronPath) -or
+        [string]::IsNullOrWhiteSpace($HostPath) -or
+        -not (Test-Path $HostPath)) {
+        return [ordered]@{
+            status = "TARGET_UNAVAILABLE"
+            reason = "Pinned Electron runtime or test host was not available."
+        }
+    }
+
+    $process = $null
+    $shell = $null
+    $caseResults = @()
+
+    try {
+        $version = (& $ElectronPath --version 2>$null | Select-Object -First 1)
+        $process = Start-Process -FilePath $ElectronPath -ArgumentList @(
+            "--force-renderer-accessibility",
+            $HostPath
+        ) -PassThru
+
+        if (-not (Wait-MainWindow -Process $process -Attempts 120)) {
+            return [ordered]@{
+                status = "HARNESS_FOCUS_UNAVAILABLE"
+                reason = "Electron test host did not expose an interactive main window."
+                version = $version
+            }
+        }
+
+        $shell = Activate-Process -Process $process
+        Start-Sleep -Milliseconds 500
+
+        $cases = @(
+            [ordered]@{
+                name = "WICI Electron Input"
+                marker = "wiciinputproof"
+                titleMarker = "input:wiciinputproof"
+            },
+            [ordered]@{
+                name = "WICI Electron Contenteditable"
+                marker = "wicieditableproof"
+                titleMarker = "editable:wicieditableproof"
+            }
+        )
+
+        foreach ($case in $cases) {
+            $focusResult = Focus-NamedDescendant -Process $process -Names @($case.name)
+            if (-not $focusResult.success) {
+                return [ordered]@{
+                    status = "HARNESS_FOCUS_UNAVAILABLE"
+                    process = $process.ProcessName
+                    version = $version
+                    case = $case.name
+                    focus = $focusResult
+                }
+            }
+
+            [WiciTargetDiscoveryNative]::SendCtrlKey(0x41)
+            Start-Sleep -Milliseconds 100
+            $shell.SendKeys($case.marker)
+
+            $echoConfirmed = $false
+            for ($i = 0; $i -lt 40; $i++) {
+                $process.Refresh()
+                if ($process.MainWindowTitle -like "*$($case.titleMarker)*") {
+                    $echoConfirmed = $true
+                    break
+                }
+                Start-Sleep -Milliseconds 100
+            }
+
+            $focusDuringEdit = Get-FocusedControlSnapshot
+            $probe = Invoke-CaretProbe
+            $active = $probe.parseable -eq $true -and
+                $probe.payload.activeCaret -eq $true
+
+            $caseResults += [ordered]@{
+                name = $case.name
+                marker = $case.marker
+                domEchoConfirmed = $echoConfirmed
+                focusDuringEdit = $focusDuringEdit
+                probe = $probe
+                activeCaret = $active
+            }
+
+            if (-not $echoConfirmed) {
+                return [ordered]@{
+                    status = "HARNESS_EDIT_UNPROVEN"
+                    process = $process.ProcessName
+                    version = $version
+                    cases = @($caseResults)
+                    reason = "Electron renderer did not echo the keyboard marker through its DOM title signal."
+                }
+            }
+            if (-not $active) {
+                return [ordered]@{
+                    status = "PRODUCT_CARET_GAP"
+                    process = $process.ProcessName
+                    version = $version
+                    cases = @($caseResults)
+                    probe = $probe
+                }
+            }
+        }
+
+        return [ordered]@{
+            status = "PROBED"
+            process = $process.ProcessName
+            version = $version
+            editConfirmed = $true
+            cases = @($caseResults)
+            probe = $caseResults[-1].probe
+        }
+    }
+    catch {
+        return [ordered]@{
+            status = "HARNESS_ERROR"
+            error = $_.Exception.Message
+            cases = @($caseResults)
+            focused = (Get-FocusedControlSnapshot)
+        }
+    }
+    finally {
+        if ($null -ne $shell) {
+            [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell)
+        }
+        Close-ProcessSafely -Process $process
+    }
+}
+
 function Test-WebView2Host {
     param([string]$HostPath)
 
@@ -1150,6 +1384,10 @@ $vscodePath = Find-Executable -Candidates @(
 $webView2HostPath = Get-ChildItem "tests\WebView2CaretHost\bin\Release" -Recurse -Filter "WebView2CaretHost.exe" -ErrorAction SilentlyContinue |
     Select-Object -First 1 |
     ForEach-Object { $_.FullName }
+$electronPath = Find-Executable -Candidates @(
+    (Join-Path (Get-Location) "artifacts\electron\electron.exe")
+)
+$electronHostPath = Join-Path (Get-Location) "tests\ElectronCaretHost"
 
 $results = [ordered]@{
     timestampUtc = [DateTimeOffset]::UtcNow.ToString("O")
@@ -1170,6 +1408,8 @@ $results = [ordered]@{
         excel = (Find-Executable -Candidates $excelCandidates)
         outlook = (Find-Executable -Candidates $outlookCandidates)
         vscode = $vscodePath
+        electron = $electronPath
+        electronHost = $electronHostPath
         webView2Runtime = $webView2Registration
         webView2Host = $webView2HostPath
     }
@@ -1177,6 +1417,7 @@ $results = [ordered]@{
         notepad = (Test-Notepad)
         settingsSearch = (Test-SettingsSearch)
         explorerRename = (Test-ExplorerRename)
+        electron = (Test-ElectronHost -ElectronPath $electronPath -HostPath $electronHostPath)
         vscodeElectron = (Test-VscodeEditor -VscodePath $vscodePath)
         webView2 = (Test-WebView2Host -HostPath $webView2HostPath)
     }
@@ -1194,6 +1435,17 @@ Write-Host "Probed built-in targets: $($probed.Count); active-caret probes: $($a
 
 if ($probed.Count -eq 0) {
     Write-Host "No built-in Windows target produced an active-caret PASS; discovery evidence remains diagnostic."
+}
+
+$mandatoryFailures = @()
+if ($results.probes.explorerRename.status -ne "PROBED") {
+    $mandatoryFailures += "Explorer rename: $($results.probes.explorerRename.status)"
+}
+if ($results.probes.electron.status -ne "PROBED") {
+    $mandatoryFailures += "Electron host: $($results.probes.electron.status)"
+}
+if ($mandatoryFailures.Count -gt 0) {
+    throw ("Mandatory desktop target validation failed: " + ($mandatoryFailures -join "; "))
 }
 
 exit 0
