@@ -684,21 +684,21 @@ function Invoke-TrayMenuAction {
 
     switch ($Action) {
         "FirstEnabled" {
-            $Shell.SendKeys("{HOME}")
+            [System.Windows.Forms.SendKeys]::SendWait("{HOME}")
             Start-Sleep -Milliseconds 80
-            $Shell.SendKeys("{ENTER}")
+            [System.Windows.Forms.SendKeys]::SendWait("{ENTER}")
         }
         "Startup" {
-            $Shell.SendKeys("{END}")
+            [System.Windows.Forms.SendKeys]::SendWait("{END}")
             Start-Sleep -Milliseconds 80
-            $Shell.SendKeys("{UP}")
+            [System.Windows.Forms.SendKeys]::SendWait("{UP}")
             Start-Sleep -Milliseconds 80
-            $Shell.SendKeys("{ENTER}")
+            [System.Windows.Forms.SendKeys]::SendWait("{ENTER}")
         }
         "Exit" {
-            $Shell.SendKeys("{END}")
+            [System.Windows.Forms.SendKeys]::SendWait("{END}")
             Start-Sleep -Milliseconds 80
-            $Shell.SendKeys("{ENTER}")
+            [System.Windows.Forms.SendKeys]::SendWait("{ENTER}")
         }
     }
 
