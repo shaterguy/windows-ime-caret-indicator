@@ -289,25 +289,20 @@ internal sealed class Win32CaretProvider : ICaretProvider
     }
 }
 
-internal sealed class CaretResolver
+internal sealed class CaretResolver : IDisposable
 {
-    private readonly ICaretProvider[] _providers =
-    {
-        new UiaCaretProvider(),
-        new Win32CaretProvider()
-    };
+    private readonly UiaCaretProvider _uia = new();
+    private readonly Win32CaretProvider _win32 = new();
 
     internal bool TryGetActiveCaret(out CaretState? state)
     {
-        foreach (var provider in _providers)
-        {
-            if (provider.TryGetActiveCaret(out state) && state is not null)
-                return true;
-        }
+        if (_uia.TryGetActiveCaret(out state) && state is not null)
+            return true;
 
-        state = null;
-        return false;
+        return _win32.TryGetActiveCaret(out state);
     }
+
+    public void Dispose() => _uia.Dispose();
 }
 
 internal sealed class ImeStateReader

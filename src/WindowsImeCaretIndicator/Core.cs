@@ -257,12 +257,3 @@ internal static class SelfTests
             throw new InvalidOperationException($"expected {expected}, actual {actual}");
     }
 }
-
-
-internal static class CaretResolverLifecycle
-{
-    internal static void Dispose(this CaretResolver resolver)
-    {
-        ArgumentNullException.ThrowIfNull(resolver);
-    }
-}
