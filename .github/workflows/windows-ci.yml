@@ -111,6 +111,21 @@ jobs:
           }
           Write-Host "Validated immutable v0.1.0 portable: $hash"
 
+      - name: Actual ChatGPT composer caret diagnostic
+        id: chatgpt_actual
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $exe = Resolve-Path "artifacts/released-v0.1.0/WindowsImeCaretIndicator.exe"
+          ./tests/chatgpt-caret-smoke.ps1 -ExecutablePath $exe.Path
+
+      - name: Upload ChatGPT caret evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: WICI-chatgpt-caret-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/chatgpt-caret.json
+          if-no-files-found: error
+
       - name: Discover mandatory Windows target environments against immutable release
         shell: pwsh
         run: |
@@ -208,7 +223,7 @@ jobs:
           if-no-files-found: error
 
       - name: Enforce runtime smoke results
-        if: steps.browser_smoke.outcome == 'failure' || steps.korean_profile.outcome == 'failure' || steps.korean_ime_smoke.outcome == 'failure'
+        if: steps.browser_smoke.outcome == 'failure' || steps.korean_profile.outcome == 'failure' || steps.korean_ime_smoke.outcome == 'failure' || steps.chatgpt_actual.outcome == 'failure'
         shell: pwsh
         run: |
           throw "One or more runtime smoke tests failed earlier in this job."

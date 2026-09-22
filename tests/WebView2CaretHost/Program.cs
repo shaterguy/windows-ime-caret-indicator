@@ -1,7 +1,14 @@
 using Microsoft.Web.WebView2.WinForms;
 
-ApplicationConfiguration.Initialize();
-Application.Run(new MainForm());
+internal static class Program
+{
+    [STAThread]
+    public static void Main()
+    {
+        ApplicationConfiguration.Initialize();
+        Application.Run(new MainForm());
+    }
+}
 
 internal sealed class MainForm : Form
 {
@@ -60,7 +67,7 @@ internal sealed class MainForm : Form
         }
         catch (Exception ex)
         {
-            Text = "WICI WebView2 Caret Host Error=" + ex.GetType().Name;
+            Text = $"WICI WebView2 Caret Host Error={ex.GetType().Name} HResult=0x{ex.HResult:X8} {ex.Message}";
         }
     }
 }

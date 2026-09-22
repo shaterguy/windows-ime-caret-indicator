@@ -58,9 +58,38 @@ function Convert-ProbeResult {
 }
 
 function Invoke-CaretProbe {
-    $output = @(& $ExecutablePath --probe-once 2>&1)
-    $exitCode = $LASTEXITCODE
-    return Convert-ProbeResult -Output $output -ExitCode $exitCode
+    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = $ExecutablePath
+    $startInfo.ArgumentList.Add("--probe-once")
+    $startInfo.UseShellExecute = $false
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $startInfo.CreateNoWindow = $true
+
+    $process = [System.Diagnostics.Process]::new()
+    $process.StartInfo = $startInfo
+    try {
+        if (-not $process.Start()) {
+            throw "Caret probe process did not start."
+        }
+
+        $stdout = $process.StandardOutput.ReadToEnd()
+        $stderr = $process.StandardError.ReadToEnd()
+        $process.WaitForExit()
+
+        $output = @()
+        if (-not [string]::IsNullOrWhiteSpace($stdout)) {
+            $output += ($stdout -split "\r?\n")
+        }
+        if (-not [string]::IsNullOrWhiteSpace($stderr)) {
+            $output += ($stderr -split "\r?\n")
+        }
+
+        return Convert-ProbeResult -Output $output -ExitCode $process.ExitCode
+    }
+    finally {
+        $process.Dispose()
+    }
 }
 
 function Wait-MainWindow {
@@ -313,35 +342,6 @@ function Start-ExplorerRenameAttempt {
 
     try {
         $Process.Refresh()
-        $root = [System.Windows.Automation.AutomationElement]::FromHandle(
-            $Process.MainWindowHandle)
-        if ($null -eq $root) {
-            return [ordered]@{
-                success = $false
-                reason = "Explorer UI Automation root was unavailable."
-            }
-        }
-
-        $baseName = [System.IO.Path]::GetFileNameWithoutExtension($Name)
-        $all = $root.FindAll(
-            [System.Windows.Automation.TreeScope]::Descendants,
-            [System.Windows.Automation.Condition]::TrueCondition)
-
-        $target = $null
-        foreach ($element in $all) {
-            try {
-                $elementName = $element.Current.Name
-                if ($elementName -eq $Name -or
-                    $elementName -eq $baseName -or
-                    $elementName -like "$baseName*") {
-                    $target = $element
-                    break
-                }
-            }
-            catch {
-            }
-        }
-
         $windowTitle = $Process.MainWindowTitle
         if ([string]::IsNullOrWhiteSpace($windowTitle) -or
             -not $Shell.AppActivate($windowTitle)) {
@@ -351,7 +351,7 @@ function Start-ExplorerRenameAttempt {
                 focused = (Get-FocusedControlSnapshot)
             }
         }
-        Start-Sleep -Milliseconds 150
+        Start-Sleep -Milliseconds 200
 
         if ([WiciTargetDiscoveryNative]::GetForegroundWindow() -ne
             $Process.MainWindowHandle) {
@@ -362,80 +362,27 @@ function Start-ExplorerRenameAttempt {
             }
         }
 
-        if ($null -ne $target) {
-            try {
-                $selectionPattern = $null
-                if ($target.TryGetCurrentPattern(
-                        [System.Windows.Automation.SelectionItemPattern]::Pattern,
-                        [ref]$selectionPattern)) {
-                    ([System.Windows.Automation.SelectionItemPattern]$selectionPattern).Select()
-                }
+        $preRenameFocus = Get-FocusedControlSnapshot
 
-                $target.SetFocus()
-                Start-Sleep -Milliseconds 200
-
-                $preRenameFocus = Get-FocusedControlSnapshot
-                if (-not $preRenameFocus.exists -or
-                    -not $preRenameFocus.hasKeyboardFocus -or
-                    $preRenameFocus.processId -ne $Process.Id -or
-                    $preRenameFocus.controlType -eq "ControlType.Window") {
-                    return [ordered]@{
-                        success = $false
-                        reason = "Explorer target item did not retain keyboard focus before F2."
-                        focused = $preRenameFocus
-                    }
-                }
-            }
-            catch {
-                return [ordered]@{
-                    success = $false
-                    reason = $_.Exception.Message
-                    focused = (Get-FocusedControlSnapshot)
-                }
-            }
-        }
-        else {
-            $itemsCondition = [System.Windows.Automation.PropertyCondition]::new(
-                [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
-                "ItemsView")
-            $itemsView = $root.FindFirst(
-                [System.Windows.Automation.TreeScope]::Descendants,
-                $itemsCondition)
-
-            if ($null -eq $itemsView) {
-                return [ordered]@{
-                    success = $false
-                    reason = "Neither target file nor Explorer ItemsView was found in UI Automation tree."
-                    focused = (Get-FocusedControlSnapshot)
-                }
-            }
-
-            try {
-                $itemsView.SetFocus()
-                Start-Sleep -Milliseconds 150
-                $Shell.SendKeys("^a")
-                Start-Sleep -Milliseconds 150
-                $preRenameFocus = Get-FocusedControlSnapshot
-            }
-            catch {
-                return [ordered]@{
-                    success = $false
-                    reason = "Explorer ItemsView could not be focused for keyboard selection."
-                    focused = (Get-FocusedControlSnapshot)
-                }
-            }
-        }
-
+        # The temporary directory contains exactly one test file. Selection and
+        # actual edit state are not inferred from UIA control type. Downstream
+        # code proves rename mode by committing a unique name and observing the
+        # filesystem change.
+        $Shell.SendKeys("^a")
+        Start-Sleep -Milliseconds 150
+        $selectedFocus = Get-FocusedControlSnapshot
         $Shell.SendKeys("{F2}")
         Start-Sleep -Milliseconds 300
         $postF2Focus = Get-FocusedControlSnapshot
 
         return [ordered]@{
             success = $true
+            targetName = $Name
             preRenameFocus = $preRenameFocus
+            selectedFocus = $selectedFocus
             focused = $postF2Focus
             patternBasedEditable = (Test-EditableFocusSnapshot -Snapshot $postF2Focus)
-            evidence = "F2 dispatched to independently selected temporary file; actual rename will be proven by keyboard edit plus filesystem commit."
+            evidence = "F2 dispatched in an exact foreground Explorer window containing one temporary file; actual rename mode is proven only by keyboard edit plus filesystem commit."
         }
     }
     catch {
@@ -729,13 +676,17 @@ function Test-VscodeEditor {
         New-Item -ItemType Directory -Path $folder -Force | Out-Null
         Set-Content -LiteralPath $file -Value "initial" -Encoding UTF8
 
+        $fileArg = "${file}:1:1"
         Start-Process -FilePath $VscodePath -ArgumentList @(
             "--new-window",
             "--disable-extensions",
+            "--disable-workspace-trust",
             "--skip-welcome",
+            "--skip-release-notes",
             "--user-data-dir=$userData",
             "--extensions-dir=$extensions",
-            $file
+            "--goto",
+            $fileArg
         ) | Out-Null
 
         for ($i = 0; $i -lt 120; $i++) {
@@ -757,7 +708,9 @@ function Test-VscodeEditor {
         }
 
         $shell = Activate-Process -Process $process
-        Start-Sleep -Milliseconds 400
+        Start-Sleep -Milliseconds 700
+        $shell.SendKeys("^1")
+        Start-Sleep -Milliseconds 250
         $shell.SendKeys("^a")
         Start-Sleep -Milliseconds 100
         $shell.SendKeys($marker)
