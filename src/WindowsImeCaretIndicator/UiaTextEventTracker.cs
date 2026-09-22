@@ -1,38 +1,37 @@
-using System.Windows.Automation;
-using System.Windows.Automation.Text;
+using FlaUI.Core.AutomationElements;
+using FlaUI.Core.Definitions;
+using FlaUI.Core.EventHandlers;
+using FlaUI.Core.Identifiers;
+using FlaUI.UIA3;
+using Uia3TextPattern = FlaUI.UIA3.Patterns.TextPattern;
 
 namespace WindowsImeCaretIndicator;
 
 internal sealed class UiaTextEventTracker : IDisposable
 {
     private readonly Action _requestRefresh;
-    private readonly AutomationEventHandler _selectionHandler;
-    private readonly AutomationEventHandler _textChangedHandler;
-    private bool _selectionRegistered;
-    private bool _textChangedRegistered;
+    private readonly UIA3Automation _automation = new();
+    private AutomationEventHandlerBase? _selectionHandler;
+    private AutomationEventHandlerBase? _textChangedHandler;
     private bool _disposed;
 
     internal UiaTextEventTracker(Action requestRefresh)
     {
         _requestRefresh = requestRefresh;
-        _selectionHandler = OnTextEvent;
-        _textChangedHandler = OnTextEvent;
 
         try
         {
-            Automation.AddAutomationEventHandler(
-                TextPattern.TextSelectionChangedEvent,
-                AutomationElement.RootElement,
-                TreeScope.Subtree,
-                _selectionHandler);
-            _selectionRegistered = true;
+            var desktop = _automation.GetDesktop();
 
-            Automation.AddAutomationEventHandler(
-                TextPattern.TextChangedEvent,
-                AutomationElement.RootElement,
+            _selectionHandler = desktop.RegisterAutomationEvent(
+                Uia3TextPattern.TextSelectionChangedEvent,
                 TreeScope.Subtree,
-                _textChangedHandler);
-            _textChangedRegistered = true;
+                OnTextEvent);
+
+            _textChangedHandler = desktop.RegisterAutomationEvent(
+                Uia3TextPattern.TextChangedEvent,
+                TreeScope.Subtree,
+                OnTextEvent);
         }
         catch
         {
@@ -41,7 +40,9 @@ internal sealed class UiaTextEventTracker : IDisposable
         }
     }
 
-    private void OnTextEvent(object sender, AutomationEventArgs e)
+    private void OnTextEvent(
+        AutomationElement sender,
+        EventId eventId)
     {
         if (!_disposed)
             _requestRefresh();
@@ -54,36 +55,12 @@ internal sealed class UiaTextEventTracker : IDisposable
 
         _disposed = true;
 
-        if (_selectionRegistered)
-        {
-            TryRemove(
-                TextPattern.TextSelectionChangedEvent,
-                _selectionHandler);
-            _selectionRegistered = false;
-        }
+        _selectionHandler?.Dispose();
+        _selectionHandler = null;
 
-        if (_textChangedRegistered)
-        {
-            TryRemove(
-                TextPattern.TextChangedEvent,
-                _textChangedHandler);
-            _textChangedRegistered = false;
-        }
-    }
+        _textChangedHandler?.Dispose();
+        _textChangedHandler = null;
 
-    private static void TryRemove(
-        AutomationEvent eventId,
-        AutomationEventHandler handler)
-    {
-        try
-        {
-            Automation.RemoveAutomationEventHandler(
-                eventId,
-                AutomationElement.RootElement,
-                handler);
-        }
-        catch (InvalidOperationException)
-        {
-        }
+        _automation.Dispose();
     }
 }

@@ -17,5 +17,9 @@ internal sealed class TextPattern2Bridge : IDisposable
         return _fallback.TryGetActiveCaret(out state);
     }
 
-    public void Dispose() => _primary.Dispose();
+    public void Dispose()
+    {
+        _selectionFallback.Dispose();
+        _primary.Dispose();
+    }
 }

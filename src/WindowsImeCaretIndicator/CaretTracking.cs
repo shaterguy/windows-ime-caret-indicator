@@ -1,7 +1,8 @@
 using System.Drawing;
 using System.Runtime.InteropServices;
-using System.Windows.Automation;
-using System.Windows.Automation.Text;
+using FlaUI.Core.Definitions;
+using FlaUI.Core.EventHandlers;
+using FlaUI.UIA3;
 
 namespace WindowsImeCaretIndicator;
 
@@ -10,42 +11,37 @@ internal interface ICaretProvider
     bool TryGetActiveCaret(out CaretState? state);
 }
 
-internal sealed class UiaCaretProvider : ICaretProvider
+internal sealed class UiaCaretProvider : ICaretProvider, IDisposable
 {
+    private readonly UIA3Automation _automation = new();
+
+    internal UiaCaretProvider()
+    {
+        _automation.ConnectionTimeout = TimeSpan.FromMilliseconds(500);
+        _automation.TransactionTimeout = TimeSpan.FromMilliseconds(750);
+    }
+
     public bool TryGetActiveCaret(out CaretState? state)
     {
         state = null;
 
-        AutomationElement? focused;
         try
         {
-            focused = AutomationElement.FocusedElement;
-        }
-        catch (ElementNotAvailableException)
-        {
-            return false;
-        }
-        catch (COMException)
-        {
-            return false;
-        }
-
-        if (focused is null)
-            return false;
-
-        try
-        {
-            if (!focused.Current.HasKeyboardFocus)
+            var focused = _automation.FocusedElement();
+            if (focused is null ||
+                focused.Properties.HasKeyboardFocus.ValueOrDefault != true)
+            {
                 return false;
+            }
 
-            if (!focused.TryGetCurrentPattern(TextPattern.Pattern, out var rawPattern) ||
-                rawPattern is not TextPattern textPattern)
+            if (!focused.Patterns.Text.TryGetPattern(out var textPattern) ||
+                textPattern is null)
             {
                 return false;
             }
 
             var ranges = textPattern.GetSelection();
-            if (ranges.Length == 0)
+            if (ranges is not { Length: > 0 })
                 return false;
 
             var range = ranges[0];
@@ -60,7 +56,7 @@ internal sealed class UiaCaretProvider : ICaretProvider
             if (!TryGetCaretRectangle(range, out var caret))
                 return false;
 
-            var hwnd = (nint)focused.Current.NativeWindowHandle;
+            var hwnd = focused.Properties.NativeWindowHandle.ValueOrDefault;
             uint threadId = 0;
 
             if (hwnd != nint.Zero)
@@ -84,7 +80,7 @@ internal sealed class UiaCaretProvider : ICaretProvider
 
             return true;
         }
-        catch (ElementNotAvailableException)
+        catch (COMException)
         {
             return false;
         }
@@ -92,13 +88,15 @@ internal sealed class UiaCaretProvider : ICaretProvider
         {
             return false;
         }
-        catch (COMException)
+        catch (NotSupportedException)
         {
             return false;
         }
     }
 
-    private static bool TryGetCaretRectangle(TextPatternRange range, out Rectangle caret)
+    private static bool TryGetCaretRectangle(
+        ITextRange range,
+        out Rectangle caret)
     {
         if (TryFirstRectangle(range, out var rect))
         {
@@ -119,6 +117,9 @@ internal sealed class UiaCaretProvider : ICaretProvider
                 return true;
             }
         }
+        catch (COMException)
+        {
+        }
         catch (InvalidOperationException)
         {
         }
@@ -136,6 +137,9 @@ internal sealed class UiaCaretProvider : ICaretProvider
                 return true;
             }
         }
+        catch (COMException)
+        {
+        }
         catch (InvalidOperationException)
         {
         }
@@ -145,13 +149,13 @@ internal sealed class UiaCaretProvider : ICaretProvider
     }
 
     private static bool TryFirstRectangle(
-        TextPatternRange range,
-        out System.Windows.Rect rect)
+        ITextRange range,
+        out Rectangle rect)
     {
         var rectangles = range.GetBoundingRectangles();
-        if (rectangles.Length == 0)
+        if (rectangles is not { Length: > 0 })
         {
-            rect = System.Windows.Rect.Empty;
+            rect = Rectangle.Empty;
             return false;
         }
 
@@ -160,13 +164,13 @@ internal sealed class UiaCaretProvider : ICaretProvider
     }
 
     private static bool TryLastRectangle(
-        TextPatternRange range,
-        out System.Windows.Rect rect)
+        ITextRange range,
+        out Rectangle rect)
     {
         var rectangles = range.GetBoundingRectangles();
-        if (rectangles.Length == 0)
+        if (rectangles is not { Length: > 0 })
         {
-            rect = System.Windows.Rect.Empty;
+            rect = Rectangle.Empty;
             return false;
         }
 
@@ -174,23 +178,20 @@ internal sealed class UiaCaretProvider : ICaretProvider
         return IsUsable(rect);
     }
 
-    private static bool IsUsable(System.Windows.Rect rect) =>
+    private static bool IsUsable(Rectangle rect) =>
         !rect.IsEmpty &&
-        double.IsFinite(rect.X) &&
-        double.IsFinite(rect.Y) &&
-        double.IsFinite(rect.Width) &&
-        double.IsFinite(rect.Height) &&
-        rect.Height > 0.5;
+        rect.Height > 0;
 
     private static Rectangle ToCaretEdge(
-        System.Windows.Rect rect,
+        Rectangle rect,
         bool useLeftEdge)
     {
-        var x = (int)Math.Round(useLeftEdge ? rect.Left : rect.Right);
-        var y = (int)Math.Round(rect.Top);
-        var height = Math.Max(1, (int)Math.Round(rect.Height));
-
-        return new Rectangle(x, y, 1, height);
+        var x = useLeftEdge ? rect.Left : rect.Right;
+        return new Rectangle(
+            x,
+            rect.Top,
+            1,
+            Math.Max(1, rect.Height));
     }
 
     private static bool TryGetForegroundFocus(
@@ -205,10 +206,13 @@ internal sealed class UiaCaretProvider : ICaretProvider
             return false;
 
         threadId = Native.GetWindowThreadProcessId(foreground, out _);
-        return threadId != 0 && TryGetThreadFocus(threadId, out hwnd);
+        return threadId != 0 &&
+               TryGetThreadFocus(threadId, out hwnd);
     }
 
-    private static bool TryGetThreadFocus(uint threadId, out nint hwnd)
+    private static bool TryGetThreadFocus(
+        uint threadId,
+        out nint hwnd)
     {
         var info = new Native.GuiThreadInfo
         {
@@ -225,6 +229,8 @@ internal sealed class UiaCaretProvider : ICaretProvider
         hwnd = info.hwndFocus;
         return true;
     }
+
+    public void Dispose() => _automation.Dispose();
 }
 
 internal sealed class Win32CaretProvider : ICaretProvider
@@ -430,17 +436,18 @@ internal sealed class TrackingEvents : IDisposable
 {
     private readonly Action _requestRefresh;
     private readonly Native.WinEventDelegate _winEventDelegate;
-    private readonly AutomationFocusChangedEventHandler _uiaFocusHandler;
     private readonly Native.LowLevelKeyboardProc _keyboardDelegate;
     private readonly List<nint> _winHooks = new();
+    private readonly UIA3Automation _automation = new();
 
+    private FocusChangedEventHandlerBase? _uiaFocusHandler;
     private nint _keyboardHook;
+    private bool _disposed;
 
     internal TrackingEvents(Action requestRefresh)
     {
         _requestRefresh = requestRefresh;
         _winEventDelegate = OnWinEvent;
-        _uiaFocusHandler = OnUiaFocusChanged;
         _keyboardDelegate = OnKeyboard;
 
         AddWinHook(
@@ -455,7 +462,15 @@ internal sealed class TrackingEvents : IDisposable
             Native.EventObjectLocationChange,
             Native.EventObjectLocationChange);
 
-        Automation.AddAutomationFocusChangedEventHandler(_uiaFocusHandler);
+        try
+        {
+            _uiaFocusHandler = _automation.RegisterFocusChangedEvent(
+                _ => _requestRefresh());
+        }
+        catch
+        {
+            _uiaFocusHandler = null;
+        }
 
         var module = Native.GetModuleHandleW(null);
         _keyboardHook = Native.SetWindowsHookExW(
@@ -487,7 +502,8 @@ internal sealed class TrackingEvents : IDisposable
         if (hook == nint.Zero)
         {
             Dispose();
-            throw new InvalidOperationException("SetWinEventHook failed.");
+            throw new InvalidOperationException(
+                "SetWinEventHook failed.");
         }
 
         _winHooks.Add(hook);
@@ -511,11 +527,6 @@ internal sealed class TrackingEvents : IDisposable
         _requestRefresh();
     }
 
-    private void OnUiaFocusChanged(
-        object sender,
-        AutomationFocusChangedEventArgs e) =>
-        _requestRefresh();
-
     private nint OnKeyboard(int code, nuint wParam, nint lParam)
     {
         if (code >= 0 &&
@@ -534,14 +545,13 @@ internal sealed class TrackingEvents : IDisposable
 
     public void Dispose()
     {
-        try
-        {
-            Automation.RemoveAutomationFocusChangedEventHandler(
-                _uiaFocusHandler);
-        }
-        catch (InvalidOperationException)
-        {
-        }
+        if (_disposed)
+            return;
+
+        _disposed = true;
+
+        _uiaFocusHandler?.Dispose();
+        _uiaFocusHandler = null;
 
         if (_keyboardHook != nint.Zero)
         {
@@ -556,5 +566,6 @@ internal sealed class TrackingEvents : IDisposable
         }
 
         _winHooks.Clear();
+        _automation.Dispose();
     }
 }

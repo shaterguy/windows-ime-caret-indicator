@@ -30,6 +30,9 @@ jobs:
       - name: Build debug runtime
         run: dotnet build src/WindowsImeCaretIndicator/WindowsImeCaretIndicator.csproj -c Debug --no-restore
 
+      - name: Publish v0.1.1 single-file candidate
+        run: dotnet publish src/WindowsImeCaretIndicator/WindowsImeCaretIndicator.csproj -c Release -r win-x64 --self-contained true --no-restore -p:PublishSingleFile=true -o artifacts/win-x64
+
       - name: Restore and build WebView2 caret test host
         shell: pwsh
         run: |
@@ -57,11 +60,8 @@ jobs:
         continue-on-error: true
         shell: pwsh
         run: |
-          $exe = Get-ChildItem "src/WindowsImeCaretIndicator/bin/Debug" -Recurse -Filter "WindowsImeCaretIndicator.exe" | Select-Object -First 1
-          if (-not $exe) {
-            throw "Debug executable was not produced."
-          }
-          ./tests/browser-caret-smoke.ps1 -ExecutablePath $exe.FullName
+          $exe = Resolve-Path "artifacts/win-x64/WindowsImeCaretIndicator.exe"
+          ./tests/browser-caret-smoke.ps1 -ExecutablePath $exe.Path
 
       - name: Prepare Korean input profile
         id: korean_profile
@@ -92,11 +92,8 @@ jobs:
         continue-on-error: true
         shell: pwsh
         run: |
-          $exe = Get-ChildItem "src/WindowsImeCaretIndicator/bin/Debug" -Recurse -Filter "WindowsImeCaretIndicator.exe" | Select-Object -First 1
-          if (-not $exe) {
-            throw "Debug executable was not produced."
-          }
-          ./tests/korean-ime-smoke.ps1 -ExecutablePath $exe.FullName
+          $exe = Resolve-Path "artifacts/win-x64/WindowsImeCaretIndicator.exe"
+          ./tests/korean-ime-smoke.ps1 -ExecutablePath $exe.Path
 
       - name: Download immutable v0.1.0 portable for runtime validation
         shell: pwsh
@@ -111,12 +108,12 @@ jobs:
           }
           Write-Host "Validated immutable v0.1.0 portable: $hash"
 
-      - name: Actual ChatGPT composer caret diagnostic
+      - name: Actual ChatGPT composer caret diagnostic on v0.1.1 candidate
         id: chatgpt_actual
         continue-on-error: true
         shell: pwsh
         run: |
-          $exe = Resolve-Path "artifacts/released-v0.1.0/WindowsImeCaretIndicator.exe"
+          $exe = Resolve-Path "artifacts/win-x64/WindowsImeCaretIndicator.exe"
           ./tests/chatgpt-caret-smoke.ps1 -ExecutablePath $exe.Path
 
       - name: Upload ChatGPT caret evidence
@@ -126,10 +123,10 @@ jobs:
           path: artifacts/chatgpt-caret.json
           if-no-files-found: error
 
-      - name: Discover mandatory Windows target environments against immutable release
+      - name: Discover mandatory Windows target environments against v0.1.1 candidate
         shell: pwsh
         run: |
-          $exe = Resolve-Path "artifacts/released-v0.1.0/WindowsImeCaretIndicator.exe"
+          $exe = Resolve-Path "artifacts/win-x64/WindowsImeCaretIndicator.exe"
           ./tests/windows-target-discovery.ps1 -ExecutablePath $exe.Path
 
       - name: Upload Windows target discovery evidence
@@ -139,10 +136,10 @@ jobs:
           path: artifacts/runtime-target-discovery.json
           if-no-files-found: error
 
-      - name: Validate released overlay runtime quality
+      - name: Validate v0.1.1 candidate overlay runtime quality
         shell: pwsh
         run: |
-          $exe = Resolve-Path "artifacts/released-v0.1.0/WindowsImeCaretIndicator.exe"
+          $exe = Resolve-Path "artifacts/win-x64/WindowsImeCaretIndicator.exe"
           ./tests/runtime-quality-smoke.ps1 -ExecutablePath $exe.Path
 
       - name: Upload released runtime-quality evidence
@@ -154,9 +151,6 @@ jobs:
             artifacts/runtime-quality-overlay.png
           if-no-files-found: error
 
-      - name: Publish Windows x64 self-contained
-        run: dotnet publish src/WindowsImeCaretIndicator/WindowsImeCaretIndicator.csproj -c Release -r win-x64 --self-contained true --no-restore -p:PublishSingleFile=true -o artifacts/win-x64
-
       - name: Install Inno Setup
         shell: pwsh
         run: choco install innosetup --version=6.7.1 -y --no-progress
@@ -164,7 +158,7 @@ jobs:
       - name: Build installer
         shell: pwsh
         run: |
-          ISCC.exe /DMyAppVersion=0.1.0 installer/WindowsImeCaretIndicator.iss
+          ISCC.exe /DMyAppVersion=0.1.1 installer/WindowsImeCaretIndicator.iss
           if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
           }
