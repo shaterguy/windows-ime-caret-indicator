@@ -338,6 +338,22 @@ internal static class SelfTests
                     $"\"{uninstaller}\""));
         }, errors);
 
+        Check("formal v0.1.0 uninstall identity tolerates absent location", () =>
+        {
+            var legacyDirectory =
+                LegacyV010Migration.LegacyInstallDirectory;
+            var uninstaller = Path.Combine(
+                legacyDirectory,
+                "unins000.exe");
+            Equal(
+                true,
+                LegacyV010Migration.IsExpectedLegacyUninstallIdentity(
+                    "Windows IME Caret Indicator",
+                    "0.1.0",
+                    installLocation: null,
+                    $"\"{uninstaller}\""));
+        }, errors);
+
         Check("current startup identity is distinct from v0.1.0", () =>
         {
             if (string.Equals(
@@ -375,7 +391,7 @@ internal static class SelfTests
         foreach (var error in errors)
             Console.Error.WriteLine(error);
 
-        const int total = 31;
+        const int total = 32;
         Console.WriteLine($"{total - errors.Count}/{total} tests passed.");
         return errors.Count == 0 ? 0 : 1;
     }
