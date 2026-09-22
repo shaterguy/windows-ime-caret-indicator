@@ -278,14 +278,23 @@ public static class WiciRuntimeNative
             UIntPtr.Zero);
     }
 
-    public static WiciRectSnapshot FindNotifyIconRect(int pid)
+    private static HashSet<IntPtr> FindProcessWindows(int pid)
     {
         var windows = new HashSet<IntPtr>();
         EnumWindows((hwnd, _) =>
         {
             GetWindowThreadProcessId(hwnd, out var ownerPid);
             if (ownerPid == (uint)pid)
+            {
                 windows.Add(hwnd);
+                EnumChildWindows(hwnd, (child, __) =>
+                {
+                    GetWindowThreadProcessId(child, out var childOwnerPid);
+                    if (childOwnerPid == (uint)pid)
+                        windows.Add(child);
+                    return true;
+                }, IntPtr.Zero);
+            }
             return true;
         }, IntPtr.Zero);
 
@@ -298,7 +307,12 @@ public static class WiciRuntimeNative
             return true;
         }, IntPtr.Zero);
 
-        foreach (var hwnd in windows)
+        return windows;
+    }
+
+    public static WiciRectSnapshot FindNotifyIconRect(int pid)
+    {
+        foreach (var hwnd in FindProcessWindows(pid))
         {
             for (uint id = 0; id <= 64; id++)
             {
@@ -325,6 +339,28 @@ public static class WiciRuntimeNative
         }
 
         return null;
+    }
+
+    public static int TriggerNotifyIconContextMenu(int pid)
+    {
+        const uint WM_TRAYMOUSEMESSAGE = 0x0800;
+        const uint WM_RBUTTONUP = 0x0205;
+        var sent = 0;
+
+        foreach (var hwnd in FindProcessWindows(pid))
+        {
+            if (IsWindowVisible(hwnd))
+                continue;
+
+            SendMessageW(
+                hwnd,
+                WM_TRAYMOUSEMESSAGE,
+                new IntPtr(1),
+                new IntPtr(WM_RBUTTONUP));
+            sent++;
+        }
+
+        return sent;
     }
 }
 "@
@@ -705,20 +741,28 @@ function Invoke-TrayMenuAction {
         throw "Product exited before tray action '$Action'."
     }
 
-    $rect = [WiciRuntimeNative]::FindNotifyIconRect($Product.Id)
-    if ($null -eq $rect) {
-        throw "Unable to locate the product notification-area icon."
-    }
-
     $visibleBeforeOpen = @(Get-VisibleProductWindows -Product $Product)
     $existingHandles = @(
         $visibleBeforeOpen |
             ForEach-Object { [int64]$_.Handle }
     )
 
-    $x = [Math]::Floor(($rect.Left + $rect.Right) / 2)
-    $y = [Math]::Floor(($rect.Top + $rect.Bottom) / 2)
-    [WiciRuntimeNative]::RightClick($x, $y)
+    $rect = [WiciRuntimeNative]::FindNotifyIconRect($Product.Id)
+    $openMethod = "PhysicalRightClick"
+    $callbackMessages = 0
+
+    if ($null -ne $rect) {
+        $x = [Math]::Floor(($rect.Left + $rect.Right) / 2)
+        $y = [Math]::Floor(($rect.Top + $rect.Bottom) / 2)
+        [WiciRuntimeNative]::RightClick($x, $y)
+    }
+    else {
+        $openMethod = "NotifyIconCallbackFallback"
+        $callbackMessages = [WiciRuntimeNative]::TriggerNotifyIconContextMenu($Product.Id)
+        if ($callbackMessages -le 0) {
+            throw "Unable to locate a notification-area icon or a product callback window."
+        }
+    }
 
     $visibleAfterOpen = @()
     $popup = $null
@@ -741,8 +785,8 @@ function Invoke-TrayMenuAction {
         $afterSummary = $visibleAfterOpen |
             Select-Object Handle, ClassName, Title
         throw (
-            "Tray right-click did not expose a new product popup window. " +
-            "before=" +
+            "Tray activation did not expose a new product popup window. " +
+            "method=$openMethod before=" +
             ($beforeSummary | ConvertTo-Json -Compress) +
             " after=" +
             ($afterSummary | ConvertTo-Json -Compress))
@@ -777,14 +821,21 @@ function Invoke-TrayMenuAction {
     }
 
     Start-Sleep -Milliseconds 200
-    return [ordered]@{
-        action = $Action
-        iconRect = [ordered]@{
+    $iconRectResult = $null
+    if ($null -ne $rect) {
+        $iconRectResult = [ordered]@{
             left = $rect.Left
             top = $rect.Top
             right = $rect.Right
             bottom = $rect.Bottom
         }
+    }
+
+    return [ordered]@{
+        action = $Action
+        iconRect = $iconRectResult
+        openMethod = $openMethod
+        callbackMessages = $callbackMessages
         visibleProductWindowsBeforeOpen = $visibleBeforeOpen.Count
         visibleProductWindowsAfterOpen = $visibleAfterOpen.Count
         popup = [ordered]@{
@@ -792,7 +843,7 @@ function Invoke-TrayMenuAction {
             className = $popup.ClassName
             title = $popup.Title
         }
-        physicalRightClick = $true
+        physicalRightClick = ($openMethod -eq "PhysicalRightClick")
         popupWindowObserved = $true
         popupForegrounded = $true
         keyboardNavigation = $true
