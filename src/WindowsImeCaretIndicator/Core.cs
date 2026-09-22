@@ -240,31 +240,108 @@ internal static class SelfTests
             Equal("--wait-for-instance", info.Arguments);
         }, errors);
 
-        Check("Program Files elevation target is accepted", () =>
-        {
-            var programFiles = Environment.GetFolderPath(
-                Environment.SpecialFolder.ProgramFiles);
-            if (string.IsNullOrWhiteSpace(programFiles))
-                throw new InvalidOperationException(
-                    "Program Files path is unavailable.");
-
-            var target = Path.Combine(
-                programFiles,
-                "Windows IME Caret Indicator",
-                "WindowsImeCaretIndicator.exe");
+        Check("protected elevation policy accepts exact trusted target", () =>
             Equal(
                 true,
-                ElevationSupport.IsProtectedElevationTarget(target));
-        }, errors);
+                ElevationTargetPolicy.IsAccepted(
+                    exactTarget: true,
+                    targetExists: true,
+                    hasReparsePoint: false,
+                    currentUserHasUnsafeAccess: false,
+                    validationSucceeded: true)),
+            errors);
 
-        Check("user-writable elevation target is rejected", () =>
-        {
-            var target = Path.Combine(
-                Path.GetTempPath(),
-                "WindowsImeCaretIndicator.exe");
+        Check("protected elevation policy rejects wrong target", () =>
             Equal(
                 false,
-                ElevationSupport.IsProtectedElevationTarget(target));
+                ElevationTargetPolicy.IsAccepted(
+                    exactTarget: false,
+                    targetExists: true,
+                    hasReparsePoint: false,
+                    currentUserHasUnsafeAccess: false,
+                    validationSucceeded: true)),
+            errors);
+
+        Check("protected elevation policy rejects reparse target", () =>
+            Equal(
+                false,
+                ElevationTargetPolicy.IsAccepted(
+                    exactTarget: true,
+                    targetExists: true,
+                    hasReparsePoint: true,
+                    currentUserHasUnsafeAccess: false,
+                    validationSucceeded: true)),
+            errors);
+
+        Check("protected elevation policy rejects writable target", () =>
+            Equal(
+                false,
+                ElevationTargetPolicy.IsAccepted(
+                    exactTarget: true,
+                    targetExists: true,
+                    hasReparsePoint: false,
+                    currentUserHasUnsafeAccess: true,
+                    validationSucceeded: true)),
+            errors);
+
+        Check("protected elevation policy fails closed on validation error", () =>
+            Equal(
+                false,
+                ElevationTargetPolicy.IsAccepted(
+                    exactTarget: true,
+                    targetExists: true,
+                    hasReparsePoint: false,
+                    currentUserHasUnsafeAccess: false,
+                    validationSucceeded: false)),
+            errors);
+
+        Check("migration preserves existing v2 state", () =>
+        {
+            var selected = LegacyV010Lifecycle.ChooseSettings(
+                new AppSettings
+                {
+                    StartWithWindows = false,
+                    Paused = true,
+                    InstallExecutablePath = @"C:\Program Files\WICI\current.exe"
+                },
+                new AppSettings
+                {
+                    StartWithWindows = true,
+                    Paused = false
+                },
+                legacyStartupOwned: true);
+
+            Equal(false, selected.StartWithWindows);
+            Equal(true, selected.Paused);
+            Equal(
+                @"C:\Program Files\WICI\current.exe",
+                selected.InstallExecutablePath!);
+        }, errors);
+
+        Check("migration preserves formal v0.1.0 settings", () =>
+        {
+            var selected = LegacyV010Lifecycle.ChooseSettings(
+                current: null,
+                legacy: new AppSettings
+                {
+                    StartWithWindows = false,
+                    Paused = true
+                },
+                legacyStartupOwned: true);
+
+            Equal(false, selected.StartWithWindows);
+            Equal(true, selected.Paused);
+        }, errors);
+
+        Check("migration infers startup from owned legacy Run value", () =>
+        {
+            var selected = LegacyV010Lifecycle.ChooseSettings(
+                current: null,
+                legacy: null,
+                legacyStartupOwned: true);
+
+            Equal(true, selected.StartWithWindows);
+            Equal(false, selected.Paused);
         }, errors);
 
         Check("single instance lease excludes a second thread", () =>
@@ -292,7 +369,7 @@ internal static class SelfTests
         foreach (var error in errors)
             Console.Error.WriteLine(error);
 
-        const int total = 23;
+        const int total = 29;
         Console.WriteLine($"{total - errors.Count}/{total} tests passed.");
         return errors.Count == 0 ? 0 : 1;
     }
