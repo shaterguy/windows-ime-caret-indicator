@@ -179,6 +179,19 @@ public static class WiciRestrictedMediumRunner
         string commandLine,
         string currentDirectory)
     {
+        return Start(
+            applicationName,
+            commandLine,
+            currentDirectory,
+            0);
+    }
+
+    public static WiciMediumRunResult Start(
+        string applicationName,
+        string commandLine,
+        string currentDirectory,
+        int waitForExitMilliseconds)
+    {
         IntPtr sourceToken = IntPtr.Zero;
         IntPtr primaryToken = IntPtr.Zero;
         IntPtr restrictedToken = IntPtr.Zero;
@@ -275,11 +288,38 @@ public static class WiciRestrictedMediumRunner
             try
             {
                 var rid = GetIntegrityRid(created.hProcess);
+                var exitCode = 259;
+                if (waitForExitMilliseconds > 0)
+                {
+                    var wait = WaitForSingleObject(
+                        created.hProcess,
+                        (uint)waitForExitMilliseconds);
+                    if (wait == WAIT_TIMEOUT)
+                    {
+                        TerminateProcess(created.hProcess, 1223);
+                        throw new TimeoutException(
+                            "Restricted medium process timed out.");
+                    }
+                    if (wait != WAIT_OBJECT_0)
+                    {
+                        throw new Win32Exception(
+                            Marshal.GetLastWin32Error(),
+                            "WaitForSingleObject failed.");
+                    }
+                    if (!GetExitCodeProcess(created.hProcess, out var rawExitCode))
+                    {
+                        throw new Win32Exception(
+                            Marshal.GetLastWin32Error(),
+                            "GetExitCodeProcess failed.");
+                    }
+                    exitCode = (int)rawExitCode;
+                }
+
                 return new WiciMediumRunResult
                 {
                     ProcessId = (int)created.dwProcessId,
                     IntegrityRid = rid,
-                    ExitCode = 0
+                    ExitCode = exitCode
                 };
             }
             finally
@@ -455,4 +495,36 @@ function Start-WiciRestrictedMediumProcess {
         $result.IntegrityRid)
 
     return [System.Diagnostics.Process]::GetProcessById($result.ProcessId)
+}
+
+function Invoke-WiciRestrictedMediumProcess {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$FilePath,
+        [string]$Role = "runtime",
+        [int]$TimeoutMilliseconds = 5000
+    )
+
+    $resolved = (Resolve-Path -LiteralPath $FilePath).Path
+    $commandLine = '"' + $resolved + '"'
+
+    $result = [WiciRestrictedMediumRunner]::Start(
+        $resolved,
+        $commandLine,
+        (Get-Location).Path,
+        $TimeoutMilliseconds)
+
+    if ($result.IntegrityRid -lt 0x2000 -or
+        $result.IntegrityRid -ge 0x3000) {
+        throw "Restricted process '$Role' did not run at Medium integrity."
+    }
+
+    Write-Host (
+        "WICI_RESTRICTED_MEDIUM_COMPLETED role={0} pid={1} integrityRid={2} exitCode={3}" -f
+        $Role,
+        $result.ProcessId,
+        $result.IntegrityRid,
+        $result.ExitCode)
+
+    return $result
 }

@@ -231,7 +231,39 @@ jobs:
           $text = $text.Replace('    Write-TestSettings -StartWithWindows $true -Paused $false -Path $settingsPath', '    Write-Host "WICI_RUNTIME_STAGE=bootstrap"; Write-TestSettings -StartWithWindows $true -Paused $false -Path $settingsPath')
           $text = $text.Replace('    $hostProcess = Start-Process -FilePath $ExecutablePath -ArgumentList "--test-host" -PassThru', '    Write-Host "WICI_RUNTIME_STAGE=start-test-host"; $hostProcess = Start-WiciRestrictedMediumProcess -FilePath $ExecutablePath -ArgumentList @("--test-host") -Role "test-host"')
           $text = $text.Replace('    $product = Start-Process -FilePath $ExecutablePath -PassThru', '    Write-Host "WICI_RUNTIME_STAGE=start-product"; $product = Start-WiciRestrictedMediumProcess -FilePath $ExecutablePath -Role "product"')
-          $text = $text.Replace('    $secondary = Start-Process -FilePath $ExecutablePath -PassThru', '    Write-Host "WICI_RUNTIME_STAGE=start-secondary"; $secondary = Start-WiciRestrictedMediumProcess -FilePath $ExecutablePath -Role "secondary"')
+          $lines = @($text -split '\r?\n')
+          $secondaryIndex = [Array]::IndexOf(
+            $lines,
+            '    $secondary = Start-Process -FilePath $ExecutablePath -PassThru')
+          if ($secondaryIndex -lt 0) {
+            throw "Runtime-quality secondary-launch block was not found."
+          }
+          $expectedSecondary = @(
+            '    $secondary = Start-Process -FilePath $ExecutablePath -PassThru',
+            '    if (-not $secondary.WaitForExit(5000)) {',
+            '        throw "Second normal launch did not exit under the single-instance mutex."',
+            '    }',
+            '    if ($secondary.ExitCode -ne 0) {',
+            '        throw "Second normal launch exited with code $($secondary.ExitCode)."',
+            '    }'
+          )
+          for ($i = 0; $i -lt $expectedSecondary.Count; $i++) {
+            if ($lines[$secondaryIndex + $i] -ne $expectedSecondary[$i]) {
+              throw "Runtime-quality secondary-launch contract drifted at offset $i."
+            }
+          }
+          $replacementSecondary = @(
+            '    Write-Host "WICI_RUNTIME_STAGE=start-secondary"',
+            '    $secondaryResult = Invoke-WiciRestrictedMediumProcess -FilePath $ExecutablePath -Role "secondary" -TimeoutMilliseconds 5000',
+            '    if ($secondaryResult.ExitCode -ne 0) {',
+            '        throw "Second normal launch exited with code $($secondaryResult.ExitCode)."',
+            '    }',
+            '    $secondary = $null'
+          )
+          $beforeSecondary = $lines[0..($secondaryIndex - 1)]
+          $afterSecondary = $lines[($secondaryIndex + $expectedSecondary.Count)..($lines.Count - 1)]
+          $lines = @($beforeSecondary + $replacementSecondary + $afterSecondary)
+          $text = $lines -join [Environment]::NewLine
           $text = $text.Replace('    $responsiveness = Measure-OverlayResponseLatency -Product $product -Shell $shell -SampleCount 20', '    Write-Host "WICI_RUNTIME_STAGE=latency"; $responsiveness = Measure-OverlayResponseLatency -Product $product -Shell $shell -SampleCount 20')
           $text = $text.Replace('    $soak = Invoke-CaretSoak -Product $product -Shell $shell -DurationSeconds 180', '    Write-Host "WICI_RUNTIME_STAGE=soak"; $soak = Invoke-CaretSoak -Product $product -Shell $shell -DurationSeconds 180; Write-Host "WICI_RUNTIME_STAGE=soak-done"')
           $text = $text.Replace('    $trayPause = Invoke-TrayMenuAction -Product $product -Shell $shell -Action "FirstEnabled"', '    Write-Host "WICI_RUNTIME_STAGE=tray-lifecycle"; $trayPause = Invoke-TrayMenuAction -Product $product -Shell $shell -Action "FirstEnabled"')
