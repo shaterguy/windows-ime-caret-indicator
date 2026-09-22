@@ -213,7 +213,7 @@ jobs:
             exit $LASTEXITCODE
           }
 
-      - name: Install and uninstall smoke test
+      - name: Validate protected install and formal v0.1.0 migration lifecycle
         shell: pwsh
         run: |
           $installer = Get-ChildItem "artifacts/installer" -Filter "WindowsImeCaretIndicator-Setup-*.exe" | Select-Object -First 1
@@ -221,79 +221,7 @@ jobs:
             throw "Installer was not produced."
           }
 
-          $installProcess = Start-Process -FilePath $installer.FullName -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART" -Wait -PassThru
-          if ($installProcess.ExitCode -ne 0) {
-            throw "Silent installer failed with exit code $($installProcess.ExitCode)."
-          }
-
-          $installDir = Join-Path $env:ProgramFiles "Windows IME Caret Indicator"
-          $installedExe = Join-Path $installDir "WindowsImeCaretIndicator.exe"
-          if (-not (Test-Path $installedExe)) {
-            throw "Protected installed executable was not found."
-          }
-
-          $programFilesRoot = [IO.Path]::GetFullPath($env:ProgramFiles).TrimEnd('\') + '\'
-          $installedFullPath = [IO.Path]::GetFullPath($installedExe)
-          if (-not $installedFullPath.StartsWith(
-                  $programFilesRoot,
-                  [StringComparison]::OrdinalIgnoreCase)) {
-            throw "Installed executable is not under Program Files."
-          }
-
-          $writeMask = (
-              [System.Security.AccessControl.FileSystemRights]::WriteData -bor
-              [System.Security.AccessControl.FileSystemRights]::AppendData -bor
-              [System.Security.AccessControl.FileSystemRights]::WriteExtendedAttributes -bor
-              [System.Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles -bor
-              [System.Security.AccessControl.FileSystemRights]::WriteAttributes -bor
-              [System.Security.AccessControl.FileSystemRights]::Delete -bor
-              [System.Security.AccessControl.FileSystemRights]::ChangePermissions -bor
-              [System.Security.AccessControl.FileSystemRights]::TakeOwnership)
-          $untrustedSids = @(
-              "S-1-1-0",
-              "S-1-5-11",
-              "S-1-5-32-545")
-          $unsafeAce = (Get-Acl -LiteralPath $installDir).Access |
-              Where-Object {
-                  if ($_.AccessControlType -ne
-                      [System.Security.AccessControl.AccessControlType]::Allow) {
-                      return $false
-                  }
-
-                  try {
-                      $sid = $_.IdentityReference.Translate(
-                          [System.Security.Principal.SecurityIdentifier]).Value
-                  }
-                  catch {
-                      return $false
-                  }
-
-                  return $sid -in $untrustedSids -and
-                      (($_.FileSystemRights -band $writeMask) -ne 0)
-              } |
-              Select-Object -First 1
-          if ($null -ne $unsafeAce) {
-            throw "Program Files install directory grants write-capable access to an untrusted principal: $unsafeAce"
-          }
-
-          $selfTestProcess = Start-Process -FilePath $installedExe -ArgumentList "--self-test" -Wait -PassThru
-          if ($selfTestProcess.ExitCode -ne 0) {
-            throw "Installed protected executable self-test failed with exit code $($selfTestProcess.ExitCode)."
-          }
-
-          $uninstaller = Get-ChildItem $installDir -Filter "unins*.exe" | Select-Object -First 1
-          if (-not $uninstaller) {
-            throw "Uninstaller was not found."
-          }
-
-          $uninstallProcess = Start-Process -FilePath $uninstaller.FullName -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART" -Wait -PassThru
-          if ($uninstallProcess.ExitCode -ne 0) {
-            throw "Silent uninstall failed with exit code $($uninstallProcess.ExitCode)."
-          }
-
-          if (Test-Path $installedExe) {
-            throw "Installed executable remains after uninstall."
-          }
+          ./tests/security-lifecycle-smoke.ps1 -CandidateInstaller $installer.FullName
 
       - name: Upload distribution files
         uses: actions/upload-artifact@v4
