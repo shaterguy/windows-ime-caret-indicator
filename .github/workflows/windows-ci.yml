@@ -97,6 +97,34 @@ jobs:
           }
           ./tests/windows-target-discovery.ps1 -ExecutablePath $exe.FullName
 
+      - name: Download immutable v0.1.0 portable for runtime validation
+        shell: pwsh
+        run: |
+          $dir = "artifacts/released-v0.1.0"
+          New-Item -ItemType Directory -Path $dir -Force | Out-Null
+          $path = Join-Path $dir "WindowsImeCaretIndicator.exe"
+          Invoke-WebRequest -Uri "https://github.com/shaterguy/windows-ime-caret-indicator/releases/download/v0.1.0/WindowsImeCaretIndicator.exe" -OutFile $path
+          $hash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($hash -ne "35981ffa5c433dad472f91c5ee7752429cdcdf17f097a291608bdd103955d202") {
+            throw "Immutable v0.1.0 portable checksum mismatch: $hash"
+          }
+          Write-Host "Validated immutable v0.1.0 portable: $hash"
+
+      - name: Validate released overlay runtime quality
+        shell: pwsh
+        run: |
+          $exe = Resolve-Path "artifacts/released-v0.1.0/WindowsImeCaretIndicator.exe"
+          ./tests/runtime-quality-smoke.ps1 -ExecutablePath $exe.Path
+
+      - name: Upload released runtime-quality evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: WICI-runtime-quality-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            artifacts/runtime-quality.json
+            artifacts/runtime-quality-overlay.png
+          if-no-files-found: error
+
       - name: Publish Windows x64 self-contained
         run: dotnet publish src/WindowsImeCaretIndicator/WindowsImeCaretIndicator.csproj -c Release -r win-x64 --self-contained true --no-restore -p:PublishSingleFile=true -o artifacts/win-x64
 
