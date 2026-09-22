@@ -1,10 +1,3 @@
-param(
-    [Parameter(Mandatory = $true)]
-    [string]$ExecutablePath,
-    [Parameter(Mandatory = $true)]
-    [string]$RuntimeScriptPath
-)
-
 $ErrorActionPreference = "Stop"
 
 Add-Type -TypeDefinition @"
