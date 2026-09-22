@@ -47,10 +47,25 @@ function Invoke-TestUser {
         $start.Environment = $script:TestUserEnvironment
     }
 
+    $captureId = [Guid]::NewGuid().ToString("N")
+    $stdoutPath = Join-Path $testRoot ("test-user-" + $captureId + ".stdout.log")
+    $stderrPath = Join-Path $testRoot ("test-user-" + $captureId + ".stderr.log")
+    $start.RedirectStandardOutput = $stdoutPath
+    $start.RedirectStandardError = $stderrPath
+
     $process = Start-Process @start
     if ($process.ExitCode -ne $ExpectedExitCode) {
+        if (Test-Path -LiteralPath $stdoutPath) {
+            Get-Content -LiteralPath $stdoutPath | Write-Host
+        }
+        if (Test-Path -LiteralPath $stderrPath) {
+            Get-Content -LiteralPath $stderrPath | Write-Host
+        }
         throw "Test-user process '$FilePath' returned $($process.ExitCode); expected $ExpectedExitCode."
     }
+
+    Remove-Item -LiteralPath $stdoutPath -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $stderrPath -Force -ErrorAction SilentlyContinue
 }
 
 $workerPath = Join-Path $testRoot "migration-worker.ps1"
