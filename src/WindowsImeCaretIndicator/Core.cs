@@ -240,31 +240,114 @@ internal static class SelfTests
             Equal("--wait-for-instance", info.Arguments);
         }, errors);
 
-        Check("Program Files elevation target is accepted", () =>
-        {
-            var programFiles = Environment.GetFolderPath(
-                Environment.SpecialFolder.ProgramFiles);
-            if (string.IsNullOrWhiteSpace(programFiles))
-                throw new InvalidOperationException(
-                    "Program Files path is unavailable.");
-
-            var target = Path.Combine(
-                programFiles,
-                "Windows IME Caret Indicator",
-                "WindowsImeCaretIndicator.exe");
+        Check("fixed Program Files product identity is accepted", () =>
             Equal(
                 true,
-                ElevationSupport.IsProtectedElevationTarget(target));
-        }, errors);
+                ProductInstallIdentity.IsExpectedInstalledExecutable(
+                    ProductInstallIdentity.InstalledExecutable)),
+            errors);
 
-        Check("user-writable elevation target is rejected", () =>
-        {
-            var target = Path.Combine(
-                Path.GetTempPath(),
-                "WindowsImeCaretIndicator.exe");
+        Check("non-installed product identity is rejected", () =>
             Equal(
                 false,
-                ElevationSupport.IsProtectedElevationTarget(target));
+                ProductInstallIdentity.IsExpectedInstalledExecutable(
+                    Path.Combine(
+                        Path.GetTempPath(),
+                        ProductInstallIdentity.ExecutableName))),
+            errors);
+
+        Check("protected elevation policy accepts exact immutable target", () =>
+            Equal(
+                true,
+                ElevationSupport.EvaluateTargetTrust(
+                    exactProductPath: true,
+                    exists: true,
+                    hasReparsePoint: false,
+                    unsafeEffectiveAccess: false,
+                    validationSucceeded: true)),
+            errors);
+
+        Check("protected elevation policy rejects reparse target", () =>
+            Equal(
+                false,
+                ElevationSupport.EvaluateTargetTrust(
+                    exactProductPath: true,
+                    exists: true,
+                    hasReparsePoint: true,
+                    unsafeEffectiveAccess: false,
+                    validationSucceeded: true)),
+            errors);
+
+        Check("protected elevation policy rejects writable target", () =>
+            Equal(
+                false,
+                ElevationSupport.EvaluateTargetTrust(
+                    exactProductPath: true,
+                    exists: true,
+                    hasReparsePoint: false,
+                    unsafeEffectiveAccess: true,
+                    validationSucceeded: true)),
+            errors);
+
+        Check("protected elevation policy fails closed on validation error", () =>
+            Equal(
+                false,
+                ElevationSupport.EvaluateTargetTrust(
+                    exactProductPath: true,
+                    exists: true,
+                    hasReparsePoint: false,
+                    unsafeEffectiveAccess: false,
+                    validationSucceeded: false)),
+            errors);
+
+        Check("legacy migration preserves explicit settings", () =>
+        {
+            var migrated = LegacyV010Migration.DetermineMigratedSettings(
+                new AppSettings
+                {
+                    StartWithWindows = false,
+                    Paused = true
+                },
+                legacyRunOwned: true);
+            Equal(false, migrated.StartWithWindows);
+            Equal(true, migrated.Paused);
+        }, errors);
+
+        Check("legacy migration infers startup from exact Run identity", () =>
+        {
+            var migrated = LegacyV010Migration.DetermineMigratedSettings(
+                legacySettings: null,
+                legacyRunOwned: true);
+            Equal(true, migrated.StartWithWindows);
+            Equal(false, migrated.Paused);
+        }, errors);
+
+        Check("formal v0.1.0 uninstall identity is recognized", () =>
+        {
+            var legacyDirectory =
+                LegacyV010Migration.LegacyInstallDirectory;
+            var uninstaller = Path.Combine(
+                legacyDirectory,
+                "unins000.exe");
+            Equal(
+                true,
+                LegacyV010Migration.IsExpectedLegacyUninstallIdentity(
+                    "Windows IME Caret Indicator",
+                    "0.1.0",
+                    legacyDirectory,
+                    $"\"{uninstaller}\""));
+        }, errors);
+
+        Check("current startup identity is distinct from v0.1.0", () =>
+        {
+            if (string.Equals(
+                    StartupRegistration.ValueName,
+                    LegacyV010Migration.LegacyRunValueName,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    "Current and legacy Run value names must differ.");
+            }
         }, errors);
 
         Check("single instance lease excludes a second thread", () =>
@@ -292,7 +375,7 @@ internal static class SelfTests
         foreach (var error in errors)
             Console.Error.WriteLine(error);
 
-        const int total = 23;
+        const int total = 31;
         Console.WriteLine($"{total - errors.Count}/{total} tests passed.");
         return errors.Count == 0 ? 0 : 1;
     }

@@ -51,6 +51,35 @@ internal static class ProgramV2
             return DiagnosticRunner.Run();
         }
 
+        if (args.Contains(
+                "--verify-protected-install",
+                StringComparer.OrdinalIgnoreCase))
+        {
+            var executable = Environment.ProcessPath;
+            return !string.IsNullOrWhiteSpace(executable) &&
+                   !ElevationSupport.IsElevated &&
+                   ElevationSupport.IsProtectedElevationTarget(
+                       executable)
+                ? 0
+                : 4;
+        }
+
+        if (args.Contains(
+                "--migrate-v010",
+                StringComparer.OrdinalIgnoreCase))
+        {
+            return LegacyV010Migration.RunExplicit();
+        }
+
+        try
+        {
+            LegacyV010Migration.RunAtStartup();
+        }
+        catch
+        {
+            return 5;
+        }
+
         var waitForInstance = args.Contains(
             "--wait-for-instance",
             StringComparer.OrdinalIgnoreCase);

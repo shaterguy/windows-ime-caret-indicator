@@ -14,13 +14,13 @@ internal sealed class AppSettings
 
     public bool Paused { get; set; }
 
-    private static string SettingsDirectory =>
+    internal static string SettingsDirectory =>
         Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "WindowsImeCaretIndicator");
 
-    private static string SettingsPath =>
-        Path.Combine(SettingsDirectory, "settings.json");
+    internal static string SettingsPath =>
+        Path.Combine(SettingsDirectory, "state-v2.json");
 
     internal static AppSettings Load()
     {
@@ -49,8 +49,8 @@ internal sealed class AppSettings
 
 internal static class StartupRegistration
 {
-    private const string RunKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
-    private const string ValueName = "WindowsImeCaretIndicator";
+    internal const string RunKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
+    internal const string ValueName = "WindowsImeCaretIndicator.ProgramFiles";
 
     internal static void Apply(bool enabled)
     {
@@ -66,6 +66,12 @@ internal static class StartupRegistration
         var executable = Environment.ProcessPath;
         if (string.IsNullOrWhiteSpace(executable))
             throw new InvalidOperationException("The executable path is unavailable.");
+
+        if (!ElevationSupport.IsProtectedElevationTarget(executable))
+        {
+            throw new InvalidOperationException(
+                "Startup registration requires the protected installed executable.");
+        }
 
         key.SetValue(ValueName, Quote(executable), RegistryValueKind.String);
     }
@@ -87,7 +93,7 @@ internal static class StartupRegistration
         }
     }
 
-    private static string Quote(string value) => $"\"{value}\"";
+    internal static string Quote(string value) => $"\"{value}\"";
 }
 
 internal sealed class IndicatorApplicationContext : ApplicationContext

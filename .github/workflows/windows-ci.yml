@@ -213,6 +213,29 @@ jobs:
             exit $LASTEXITCODE
           }
 
+      - name: Download immutable v0.1.0 installer
+        shell: pwsh
+        run: |
+          $dir = "artifacts/released-v0.1.0"
+          New-Item -ItemType Directory -Path $dir -Force | Out-Null
+          $path = Join-Path $dir "WindowsImeCaretIndicator-Setup-0.1.0.exe"
+          Invoke-WebRequest -Uri "https://github.com/shaterguy/windows-ime-caret-indicator/releases/download/v0.1.0/WindowsImeCaretIndicator-Setup-0.1.0.exe" -OutFile $path
+          $hash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($hash -ne "16ada7eea952664eecde78079c10da94421e65da6ff126e2d5c90f73d7d92f54") {
+            throw "Immutable v0.1.0 installer checksum mismatch: $hash"
+          }
+          Write-Host "Validated immutable formal v0.1.0 installer: $hash"
+
+      - name: Validate formal v0.1.0 to v0.1.1 migration
+        shell: pwsh
+        run: |
+          $legacy = Resolve-Path "artifacts/released-v0.1.0/WindowsImeCaretIndicator-Setup-0.1.0.exe"
+          $candidate = Get-ChildItem "artifacts/installer" -Filter "WindowsImeCaretIndicator-Setup-*.exe" | Select-Object -First 1
+          if (-not $candidate) {
+            throw "Candidate installer was not produced."
+          }
+          ./tests/formal-update-smoke.ps1 -LegacyInstallerPath $legacy.Path -CandidateInstallerPath $candidate.FullName
+
       - name: Install and uninstall smoke test
         shell: pwsh
         run: |
