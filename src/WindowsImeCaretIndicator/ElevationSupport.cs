@@ -253,7 +253,7 @@ internal static class ElevationSupport
             NativeMethods.GetNamedSecurityInfo(
                 path,
                 NativeMethods.SeFileObject,
-                NativeMethods.DaclSecurityInformation,
+                NativeMethods.OwnerGroupDaclSecurityInformation,
                 out _,
                 out _,
                 out _,
@@ -443,8 +443,8 @@ internal static class ElevationSupport
     private static class NativeMethods
     {
         internal const uint SeFileObject = 1;
-        internal const uint DaclSecurityInformation =
-            0x00000004;
+        internal const uint OwnerGroupDaclSecurityInformation =
+            0x00000001 | 0x00000002 | 0x00000004;
 
         [StructLayout(LayoutKind.Sequential)]
         internal struct GenericMapping
