@@ -150,8 +150,10 @@ internal static class LegacyV010Migration
     {
         var legacyRunOwned =
             IsExactLegacyRunRegistration();
+        var legacyUninstallViews =
+            GetExactLegacyUninstallRegistrationViews();
         var legacyUninstallOwned =
-            IsExactLegacyUninstallRegistration();
+            legacyUninstallViews.Count > 0;
         var legacyOwned =
             legacyRunOwned || legacyUninstallOwned;
 
@@ -178,9 +180,8 @@ internal static class LegacyV010Migration
                 File.Delete(LegacySettingsPath);
 
             DeleteKnownLegacyFiles();
-            Registry.CurrentUser.DeleteSubKeyTree(
-                LegacyUninstallKeyPath,
-                throwOnMissingSubKey: false);
+            foreach (var view in legacyUninstallViews)
+                DeleteExactLegacyUninstallRegistration(view);
         }
     }
 
@@ -260,20 +261,68 @@ internal static class LegacyV010Migration
             throwOnMissingValue: false);
     }
 
-    private static bool IsExactLegacyUninstallRegistration()
+    private static IReadOnlyList<RegistryView>
+        GetExactLegacyUninstallRegistrationViews()
     {
-        using var key = Registry.CurrentUser.OpenSubKey(
+        var matches = new List<RegistryView>();
+
+        foreach (var view in new[]
+                 {
+                     RegistryView.Registry64,
+                     RegistryView.Registry32
+                 })
+        {
+            try
+            {
+                using var baseKey = RegistryKey.OpenBaseKey(
+                    RegistryHive.CurrentUser,
+                    view);
+                using var key = baseKey.OpenSubKey(
+                    LegacyUninstallKeyPath,
+                    writable: false);
+
+                if (key is not null &&
+                    IsExpectedLegacyUninstallIdentity(
+                        key.GetValue("DisplayName") as string,
+                        key.GetValue("DisplayVersion") as string,
+                        key.GetValue("InstallLocation") as string,
+                        key.GetValue("UninstallString") as string))
+                {
+                    matches.Add(view);
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        return matches;
+    }
+
+    private static void DeleteExactLegacyUninstallRegistration(
+        RegistryView view)
+    {
+        using var baseKey = RegistryKey.OpenBaseKey(
+            RegistryHive.CurrentUser,
+            view);
+        using (var key = baseKey.OpenSubKey(
+                   LegacyUninstallKeyPath,
+                   writable: false))
+        {
+            if (key is null ||
+                !IsExpectedLegacyUninstallIdentity(
+                    key.GetValue("DisplayName") as string,
+                    key.GetValue("DisplayVersion") as string,
+                    key.GetValue("InstallLocation") as string,
+                    key.GetValue("UninstallString") as string))
+            {
+                return;
+            }
+        }
+
+        baseKey.DeleteSubKeyTree(
             LegacyUninstallKeyPath,
-            writable: false);
-
-        if (key is null)
-            return false;
-
-        return IsExpectedLegacyUninstallIdentity(
-            key.GetValue("DisplayName") as string,
-            key.GetValue("DisplayVersion") as string,
-            key.GetValue("InstallLocation") as string,
-            key.GetValue("UninstallString") as string);
+            throwOnMissingSubKey: false);
     }
 
     internal static bool IsExpectedLegacyUninstallIdentity(
