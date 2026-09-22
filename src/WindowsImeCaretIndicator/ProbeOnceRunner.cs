@@ -53,7 +53,7 @@ internal static class ProbeOnceRunner
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool CloseHandle(IntPtr handle);
 
-    internal static int Run()
+    internal static int Run(string? outputPath = null)
     {
         var process = ReadCurrentProcessSecurity();
 
@@ -65,59 +65,84 @@ internal static class ProbeOnceRunner
             if (!caretResolver.TryGetActiveCaret(out var caret) ||
                 caret is null)
             {
-                Console.WriteLine(JsonSerializer.Serialize(new
-                {
-                    activeCaret = false,
-                    process,
-                    at = DateTimeOffset.UtcNow
-                }));
-                return 3;
+                return Emit(
+                    new
+                    {
+                        activeCaret = false,
+                        process,
+                        at = DateTimeOffset.UtcNow
+                    },
+                    outputPath,
+                    3);
             }
 
             var ime = imeReader.Read(caret);
-            Console.WriteLine(JsonSerializer.Serialize(new
-            {
-                activeCaret = true,
-                process,
-                caret = new
+            return Emit(
+                new
                 {
-                    x = caret.Caret.X,
-                    y = caret.Caret.Y,
-                    width = caret.Caret.Width,
-                    height = caret.Caret.Height,
-                    focusWindow = caret.FocusWindow.ToInt64(),
-                    threadId = caret.FocusThreadId,
-                    source = caret.Source
+                    activeCaret = true,
+                    process,
+                    caret = new
+                    {
+                        x = caret.Caret.X,
+                        y = caret.Caret.Y,
+                        width = caret.Caret.Width,
+                        height = caret.Caret.Height,
+                        focusWindow = caret.FocusWindow.ToInt64(),
+                        threadId = caret.FocusThreadId,
+                        source = caret.Source
+                    },
+                    ime = new
+                    {
+                        mode = ime.Mode.ToString(),
+                        languageId = $"0x{ime.LanguageId:X4}",
+                        ime.Open,
+                        ime.Conversion,
+                        ime.Source
+                    },
+                    at = DateTimeOffset.UtcNow
                 },
-                ime = new
-                {
-                    mode = ime.Mode.ToString(),
-                    languageId = $"0x{ime.LanguageId:X4}",
-                    ime.Open,
-                    ime.Conversion,
-                    ime.Source
-                },
-                at = DateTimeOffset.UtcNow
-            }));
-
-            return 0;
+                outputPath,
+                0);
         }
         catch (Exception ex)
         {
-            Console.WriteLine(JsonSerializer.Serialize(new
-            {
-                activeCaret = false,
-                process,
-                error = new
+            return Emit(
+                new
                 {
-                    type = ex.GetType().FullName,
-                    hResult = $"0x{ex.HResult:X8}",
-                    ex.Message
+                    activeCaret = false,
+                    process,
+                    error = new
+                    {
+                        type = ex.GetType().FullName,
+                        hResult = $"0x{ex.HResult:X8}",
+                        ex.Message
+                    },
+                    at = DateTimeOffset.UtcNow
                 },
-                at = DateTimeOffset.UtcNow
-            }));
-            return 4;
+                outputPath,
+                4);
         }
+    }
+
+    private static int Emit(
+        object value,
+        string? outputPath,
+        int exitCode)
+    {
+        var json = JsonSerializer.Serialize(value);
+
+        if (!string.IsNullOrWhiteSpace(outputPath))
+        {
+            var fullPath = Path.GetFullPath(outputPath);
+            var directory = Path.GetDirectoryName(fullPath);
+            if (!string.IsNullOrWhiteSpace(directory))
+                Directory.CreateDirectory(directory);
+            File.WriteAllText(fullPath, json);
+        }
+
+        Console.WriteLine(json);
+        return exitCode;
     }
 
     private static ProcessSecuritySnapshot ReadCurrentProcessSecurity()

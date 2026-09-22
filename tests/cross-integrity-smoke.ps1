@@ -522,34 +522,27 @@ function Invoke-LocalProbe {
 function Parse-TokenProbeOutput {
     param(
         [string]$OutputPath,
-        [string]$ExitCodePath,
         [object]$Launch
     )
 
     if (-not (Test-Path -LiteralPath $OutputPath)) {
-        throw "Token-launched probe output file was not created."
-    }
-    if (-not (Test-Path -LiteralPath $ExitCodePath)) {
-        throw "Token-launched probe exit-code file was not created."
+        throw (
+            "Direct token-launched candidate did not create its probe output. " +
+            "pid=$($Launch.ProcessId) integrityRid=$($Launch.IntegrityRid) " +
+            "exitCode=$($Launch.ExitCode)")
     }
 
-    $lines = @(Get-Content -LiteralPath $OutputPath)
-    $jsonLine = $lines |
-        Where-Object { $_ -match "^\s*\{" } |
-        Select-Object -Last 1
-    if ([string]::IsNullOrWhiteSpace($jsonLine)) {
-        throw "Token-launched probe produced no JSON: $($lines -join ' | ')"
+    $json = Get-Content -LiteralPath $OutputPath -Raw
+    if ([string]::IsNullOrWhiteSpace($json)) {
+        throw "Direct token-launched candidate wrote an empty probe output."
     }
 
     return [ordered]@{
-        wrapperProcessId = $Launch.ProcessId
-        wrapperIntegrityRid = $Launch.IntegrityRid
-        wrapperIntegrityName = Get-IntegrityName $Launch.IntegrityRid
-        wrapperExitCode = $Launch.ExitCode
-        candidateExitCode = [int](
-            (Get-Content -LiteralPath $ExitCodePath -Raw).Trim())
-        probe = ($jsonLine | ConvertFrom-Json)
-        output = $lines
+        processId = $Launch.ProcessId
+        integrityRid = $Launch.IntegrityRid
+        integrityName = Get-IntegrityName $Launch.IntegrityRid
+        exitCode = $Launch.ExitCode
+        probe = ($json | ConvertFrom-Json)
     }
 }
 
@@ -570,24 +563,7 @@ $WebView2HostPath = (Resolve-Path $WebView2HostPath).Path
 $artifactsDir = Join-Path (Get-Location) "artifacts"
 New-Item -ItemType Directory -Path $artifactsDir -Force | Out-Null
 $evidencePath = Join-Path $artifactsDir "cross-integrity.json"
-$wrapperPath = Join-Path $artifactsDir "cross-integrity-wrapper.ps1"
-$mediumOutputPath = Join-Path $artifactsDir "cross-integrity-medium-probe.txt"
-$mediumExitPath = Join-Path $artifactsDir "cross-integrity-medium-exit.txt"
-
-@'
-param(
-    [string]$ExecutablePath,
-    [string]$CombinedOutputPath,
-    [string]$ExitCodePath
-)
-$ErrorActionPreference = "Continue"
-$lines = & $ExecutablePath --probe-once 2>&1
-$code = $LASTEXITCODE
-$lines | ForEach-Object { "$_" } |
-    Set-Content -LiteralPath $CombinedOutputPath -Encoding UTF8
-Set-Content -LiteralPath $ExitCodePath -Value $code -Encoding ASCII
-exit 0
-'@ | Set-Content -LiteralPath $wrapperPath -Encoding UTF8
+$mediumOutputPath = Join-Path $artifactsDir "cross-integrity-medium-probe.json"
 
 $results = [ordered]@{
     status = "RUNNING"
@@ -678,18 +654,11 @@ try {
             $highProbe.probe.process.integrityRid)
     }
 
-    $pwshPath = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
-    $quotedPwsh = '"' + $pwshPath + '"'
     $commandLine = (
-        $quotedPwsh +
-        ' -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' +
-        $wrapperPath +
-        '" -ExecutablePath "' +
+        '"' +
         $ExecutablePath +
-        '" -CombinedOutputPath "' +
+        '" --probe-once-file "' +
         $mediumOutputPath +
-        '" -ExitCodePath "' +
-        $mediumExitPath +
         '"'
     )
 
@@ -708,33 +677,12 @@ try {
 
     $launch = [WiciIntegrityNative]::LaunchWithProcessToken(
         $sourcePid,
-        $pwshPath,
+        $ExecutablePath,
         $commandLine,
         (Get-Location).Path,
         $lowerToMedium,
         30000)
 
-    $mediumProbe = Parse-TokenProbeOutput -OutputPath $mediumOutputPath -ExitCodePath $mediumExitPath -Launch $launch
-
-    if (-not (Test-MediumIntegrity $mediumProbe.wrapperIntegrityRid)) {
-        throw (
-            "The token-launched wrapper was not measured at medium integrity. RID=" +
-            $mediumProbe.wrapperIntegrityRid)
-    }
-    if (-not (Test-MediumIntegrity (
-            [int]$mediumProbe.probe.process.integrityRid))) {
-        throw (
-            "The actual candidate child was not measured at medium integrity. RID=" +
-            $mediumProbe.probe.process.integrityRid)
-    }
-
-    $results.highTarget = [ordered]@{
-        processId = $target.Id
-        integrityRid = $targetRid
-        integrityName = Get-IntegrityName $targetRid
-        readyTitle = $target.MainWindowTitle
-    }
-    $results.highProbe = $highProbe
     $results.mediumLaunch = [ordered]@{
         kind = $launchKind
         sourceProcessId = $sourcePid
@@ -744,7 +692,38 @@ try {
             $currentRid
         }
         loweredToMedium = $lowerToMedium
+        processId = $launch.ProcessId
+        integrityRid = $launch.IntegrityRid
+        integrityName = Get-IntegrityName $launch.IntegrityRid
+        exitCode = $launch.ExitCode
     }
+
+    $mediumProbe = Parse-TokenProbeOutput -OutputPath $mediumOutputPath -Launch $launch
+
+    if (-not (Test-MediumIntegrity $mediumProbe.integrityRid)) {
+        throw (
+            "The direct token-launched candidate was not measured at medium integrity. RID=" +
+            $mediumProbe.integrityRid)
+    }
+    if (-not (Test-MediumIntegrity (
+            [int]$mediumProbe.probe.process.integrityRid))) {
+        throw (
+            "The actual candidate self-reported a non-medium integrity RID=" +
+            $mediumProbe.probe.process.integrityRid)
+    }
+    if ($mediumProbe.exitCode -notin @(0, 3)) {
+        throw (
+            "The medium candidate returned an unexpected probe exit code " +
+            "$($mediumProbe.exitCode).")
+    }
+
+    $results.highTarget = [ordered]@{
+        processId = $target.Id
+        integrityRid = $targetRid
+        integrityName = Get-IntegrityName $targetRid
+        readyTitle = $target.MainWindowTitle
+    }
+    $results.highProbe = $highProbe
     $results.mediumProbe = $mediumProbe
     $results.interpretation = if ($mediumProbe.probe.activeCaret -eq $true) {
         "MEASURED_MEDIUM_CANDIDATE_OBSERVED_HIGH_TARGET_CARET"
