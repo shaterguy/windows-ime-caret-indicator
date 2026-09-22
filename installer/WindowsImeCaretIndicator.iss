@@ -17,6 +17,7 @@ AppUpdatesURL={#MyAppURL}/releases
 DefaultDirName={autopf}\Windows IME Caret Indicator
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
+DisableDirPage=yes
 PrivilegesRequired=admin
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
@@ -40,4 +41,8 @@ Source: "..\artifacts\win-x64\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignorev
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 
 [Run]
+Filename: "{app}\{#MyAppExeName}"; Parameters: "--migrate-v0.1.0"; Flags: runasoriginaluser runhidden
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: postinstall nowait skipifsilent runasoriginaluser
+
+[UninstallRun]
+Filename: "{app}\{#MyAppExeName}"; Parameters: "--uninstall-current-user"; RunOnceId: "CleanupCurrentUserState"; Flags: runhidden skipifdoesntexist
