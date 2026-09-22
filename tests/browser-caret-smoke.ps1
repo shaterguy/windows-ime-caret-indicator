@@ -58,6 +58,52 @@ function Focus-BrowserWindow {
     throw "Unable to foreground browser process '$ProcessName'."
 }
 
+function Invoke-WiciProbe {
+    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = $ExecutablePath
+    $startInfo.ArgumentList.Add("--probe-once")
+    $startInfo.UseShellExecute = $false
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $startInfo.CreateNoWindow = $true
+
+    $process = [System.Diagnostics.Process]::new()
+    $process.StartInfo = $startInfo
+    try {
+        if (-not $process.Start()) {
+            throw "Caret probe process did not start."
+        }
+
+        $stdout = $process.StandardOutput.ReadToEnd()
+        $stderr = $process.StandardError.ReadToEnd()
+        $process.WaitForExit()
+
+        $output = @()
+        if (-not [string]::IsNullOrWhiteSpace($stdout)) {
+            $output += ($stdout -split "\r?\n")
+        }
+        if (-not [string]::IsNullOrWhiteSpace($stderr)) {
+            $output += ($stderr -split "\r?\n")
+        }
+
+        if ($process.ExitCode -ne 0) {
+            throw "Caret probe exited with code $($process.ExitCode). Output: $($output -join ' | ')"
+        }
+
+        $jsonLine = $output |
+            Where-Object { $_ -match '^\s*\{' } |
+            Select-Object -Last 1
+        if ([string]::IsNullOrWhiteSpace($jsonLine)) {
+            throw "Caret probe did not emit JSON. Output: $($output -join ' | ')"
+        }
+
+        return $jsonLine | ConvertFrom-Json
+    }
+    finally {
+        $process.Dispose()
+    }
+}
+
 function Test-BrowserCaret {
     param(
         [Parameter(Mandatory = $true)]
@@ -158,14 +204,12 @@ return document.activeElement === el;
 
             Start-Sleep -Milliseconds 300
 
-            $output = & $ExecutablePath --probe-once
-            $exitCode = $LASTEXITCODE
-            if ($exitCode -ne 0) {
-                throw "$Name $($target.Label) caret probe exited with code $exitCode. Output: $output"
+            try {
+                $probe = Invoke-WiciProbe
             }
-
-            $jsonLine = $output | Select-Object -Last 1
-            $probe = $jsonLine | ConvertFrom-Json
+            catch {
+                throw "$Name $($target.Label) caret probe failed: $($_.Exception.Message)"
+            }
 
             if ($probe.activeCaret -ne $true) {
                 throw "$Name $($target.Label) caret probe did not report an active caret."

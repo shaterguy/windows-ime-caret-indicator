@@ -707,13 +707,49 @@ function Wait-Until {
 }
 
 function Invoke-Probe {
-    $output = & $ExecutablePath --probe-once
-    if ($LASTEXITCODE -ne 0) {
-        throw "Probe exited with code $LASTEXITCODE. Output: $output"
-    }
+    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = $ExecutablePath
+    $startInfo.ArgumentList.Add("--probe-once")
+    $startInfo.UseShellExecute = $false
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $startInfo.CreateNoWindow = $true
 
-    $line = $output | Select-Object -Last 1
-    return $line | ConvertFrom-Json
+    $process = [System.Diagnostics.Process]::new()
+    $process.StartInfo = $startInfo
+    try {
+        if (-not $process.Start()) {
+            throw "Probe process did not start."
+        }
+
+        $stdout = $process.StandardOutput.ReadToEnd()
+        $stderr = $process.StandardError.ReadToEnd()
+        $process.WaitForExit()
+
+        $output = @()
+        if (-not [string]::IsNullOrWhiteSpace($stdout)) {
+            $output += ($stdout -split "\r?\n")
+        }
+        if (-not [string]::IsNullOrWhiteSpace($stderr)) {
+            $output += ($stderr -split "\r?\n")
+        }
+
+        if ($process.ExitCode -ne 0) {
+            throw "Probe exited with code $($process.ExitCode). Output: $($output -join ' | ')"
+        }
+
+        $line = $output |
+            Where-Object { $_ -match '^\s*\{' } |
+            Select-Object -Last 1
+        if ([string]::IsNullOrWhiteSpace($line)) {
+            throw "Probe did not emit JSON. Output: $($output -join ' | ')"
+        }
+
+        return $line | ConvertFrom-Json
+    }
+    finally {
+        $process.Dispose()
+    }
 }
 
 function Get-TargetImeState {
