@@ -21,6 +21,54 @@ public static class WiciTargetDiscoveryNative
 
     [DllImport("user32.dll")]
     public static extern uint GetDpiForWindow(IntPtr hwnd);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RECT
+    {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetWindowRect(IntPtr hwnd, out RECT rect);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetCursorPos(int x, int y);
+
+    [DllImport("user32.dll")]
+    private static extern void mouse_event(
+        uint dwFlags,
+        uint dx,
+        uint dy,
+        uint dwData,
+        UIntPtr dwExtraInfo);
+
+    public static bool ClickWindowCenter(IntPtr hwnd)
+    {
+        const uint MOUSEEVENTF_LEFTDOWN = 0x0002;
+        const uint MOUSEEVENTF_LEFTUP = 0x0004;
+
+        if (!GetWindowRect(hwnd, out var rect))
+            return false;
+
+        var width = rect.Right - rect.Left;
+        var height = rect.Bottom - rect.Top;
+        if (width <= 0 || height <= 0)
+            return false;
+
+        var x = rect.Left + (width / 2);
+        var y = rect.Top + (height / 2);
+        if (!SetCursorPos(x, y))
+            return false;
+
+        mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, UIntPtr.Zero);
+        mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, UIntPtr.Zero);
+        return true;
+    }
 }
 "@
 
@@ -375,6 +423,12 @@ function Start-ExplorerRenameAttempt {
         Start-Sleep -Milliseconds 300
         $postF2Focus = Get-FocusedControlSnapshot
 
+        if ($postF2Focus.controlType -eq "ControlType.ListItem") {
+            $Shell.SendKeys("{F2}")
+            Start-Sleep -Milliseconds 300
+            $postF2Focus = Get-FocusedControlSnapshot
+        }
+
         return [ordered]@{
             success = $true
             targetName = $Name
@@ -546,8 +600,9 @@ function Test-ExplorerRename {
         }
 
         $renameToken = "wici-rename-" + [Guid]::NewGuid().ToString("N").Substring(0, 8)
-        $shell.SendKeys("^a")
-        Start-Sleep -Milliseconds 100
+        # Explorer selects the basename when F2 rename mode opens. Typing the
+        # unique token directly avoids SendKeys Ctrl+A ambiguity while the
+        # subsequent filesystem rename remains the independent proof.
         $shell.SendKeys($renameToken)
         Start-Sleep -Milliseconds 250
 
@@ -710,6 +765,19 @@ function Test-VscodeEditor {
         $shell = Activate-Process -Process $process
         Start-Sleep -Milliseconds 700
         $shell.SendKeys("^1")
+        Start-Sleep -Milliseconds 250
+
+        $process.Refresh()
+        if (-not [WiciTargetDiscoveryNative]::ClickWindowCenter(
+                $process.MainWindowHandle)) {
+            return [ordered]@{
+                status = "HARNESS_FOCUS_UNAVAILABLE"
+                process = $process.ProcessName
+                reason = "VS Code editor area could not be clicked."
+                focused = (Get-FocusedControlSnapshot)
+            }
+        }
+
         Start-Sleep -Milliseconds 250
         $shell.SendKeys("^a")
         Start-Sleep -Milliseconds 100
