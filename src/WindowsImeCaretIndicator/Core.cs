@@ -332,7 +332,7 @@ internal static class SelfTests
             Equal(
                 true,
                 LegacyV010Migration.IsExpectedLegacyUninstallIdentity(
-                    "Windows IME Caret Indicator 0.1.0",
+                    "Windows IME Caret Indicator version 0.1.0",
                     "0.1.0",
                     legacyDirectory,
                     $"\"{uninstaller}\""));
@@ -348,7 +348,7 @@ internal static class SelfTests
             Equal(
                 true,
                 LegacyV010Migration.IsExpectedLegacyUninstallIdentity(
-                    "Windows IME Caret Indicator 0.1.0",
+                    "Windows IME Caret Indicator version 0.1.0",
                     "0.1.0",
                     installLocation: null,
                     $"\"{uninstaller}\""));
