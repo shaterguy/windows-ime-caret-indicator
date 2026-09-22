@@ -296,15 +296,50 @@ function Focus-TestHost {
 }
 
 function Get-Probe {
-    $output = @(& $ExecutablePath --probe-once 2>&1)
-    if ($LASTEXITCODE -ne 0) {
-        throw "Caret probe failed with exit code $LASTEXITCODE. Output: $($output -join ' | ')"
+    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = $ExecutablePath
+    $startInfo.ArgumentList.Add("--probe-once")
+    $startInfo.UseShellExecute = $false
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $startInfo.CreateNoWindow = $true
+
+    $probeProcess = [System.Diagnostics.Process]::new()
+    $probeProcess.StartInfo = $startInfo
+
+    try {
+        if (-not $probeProcess.Start()) {
+            throw "Caret probe process did not start."
+        }
+
+        $stdout = $probeProcess.StandardOutput.ReadToEnd()
+        $stderr = $probeProcess.StandardError.ReadToEnd()
+        $probeProcess.WaitForExit()
+
+        $output = @()
+        if (-not [string]::IsNullOrWhiteSpace($stdout)) {
+            $output += ($stdout -split "\r?\n")
+        }
+        if (-not [string]::IsNullOrWhiteSpace($stderr)) {
+            $output += ($stderr -split "\r?\n")
+        }
+
+        if ($probeProcess.ExitCode -ne 0) {
+            throw "Caret probe failed with exit code $($probeProcess.ExitCode). Output: $($output -join ' | ')"
+        }
+
+        $jsonLine = $output |
+            Where-Object { $_ -match '^\s*\{' } |
+            Select-Object -Last 1
+        if ([string]::IsNullOrWhiteSpace($jsonLine)) {
+            throw "Caret probe did not produce JSON. Output: $($output -join ' | ')"
+        }
+
+        return ($jsonLine | ConvertFrom-Json)
     }
-    $jsonLine = $output | Where-Object { $_ -match '^\s*\{' } | Select-Object -Last 1
-    if ([string]::IsNullOrWhiteSpace($jsonLine)) {
-        throw "Caret probe did not produce JSON."
+    finally {
+        $probeProcess.Dispose()
     }
-    return ($jsonLine | ConvertFrom-Json)
 }
 
 function Get-VisibleProductWindows {
