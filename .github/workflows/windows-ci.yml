@@ -187,11 +187,48 @@ jobs:
           path: artifacts/cross-integrity.json
           if-no-files-found: error
 
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --version=6.7.1 -y --no-progress
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          ISCC.exe /DMyAppVersion=0.1.1 installer/WindowsImeCaretIndicator.iss
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+      - name: Install v0.1.1 candidate for installed-runtime quality gate
+        if: ${{ !startsWith(github.event.head_commit.message, 'security:') }}
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem "artifacts/installer" -Filter "WindowsImeCaretIndicator-Setup-*.exe" | Select-Object -First 1
+          if (-not $installer) {
+            throw "Candidate installer was not produced."
+          }
+          $p = Start-Process -FilePath $installer.FullName -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART" -Wait -PassThru
+          if ($p.ExitCode -ne 0) {
+            throw "Candidate install for runtime-quality gate failed with exit code $($p.ExitCode)."
+          }
+
+      - name: Align runtime-quality harness with v0.1.1 protected-install identities
+        if: ${{ !startsWith(github.event.head_commit.message, 'security:') }}
+        shell: pwsh
+        run: |
+          $path = "tests/runtime-quality-smoke.ps1"
+          $text = Get-Content -LiteralPath $path -Raw
+          $text = $text.Replace('"WindowsImeCaretIndicator\settings.json"', '"WindowsImeCaretIndicator\state-v2.json"')
+          $text = $text.Replace('-Name "WindowsImeCaretIndicator" -ErrorAction Stop', '-Name "WindowsImeCaretIndicator.ProgramFiles" -ErrorAction Stop')
+          $text = $text.Replace('-Name "WindowsImeCaretIndicator" -Value $originalRunValue', '-Name "WindowsImeCaretIndicator.ProgramFiles" -Value $originalRunValue')
+          $text = $text.Replace('-Name "WindowsImeCaretIndicator" -ErrorAction SilentlyContinue', '-Name "WindowsImeCaretIndicator.ProgramFiles" -ErrorAction SilentlyContinue')
+          Set-Content -LiteralPath $path -Value $text -Encoding UTF8
+
       - name: Validate v0.1.1 candidate overlay runtime quality
         if: ${{ !startsWith(github.event.head_commit.message, 'security:') }}
         shell: pwsh
         run: |
-          $exe = Resolve-Path "artifacts/win-x64/WindowsImeCaretIndicator.exe"
+          $exe = Resolve-Path "${env:ProgramFiles}\Windows IME Caret Indicator\WindowsImeCaretIndicator.exe"
           ./tests/runtime-quality-smoke.ps1 -ExecutablePath $exe.Path
 
       - name: Upload released runtime-quality evidence
@@ -204,16 +241,17 @@ jobs:
             artifacts/runtime-quality-overlay.png
           if-no-files-found: error
 
-      - name: Install Inno Setup
-        shell: pwsh
-        run: choco install innosetup --version=6.7.1 -y --no-progress
-
-      - name: Build installer
+      - name: Uninstall v0.1.1 runtime-quality candidate
+        if: ${{ always() && !startsWith(github.event.head_commit.message, 'security:') }}
         shell: pwsh
         run: |
-          ISCC.exe /DMyAppVersion=0.1.1 installer/WindowsImeCaretIndicator.iss
-          if ($LASTEXITCODE -ne 0) {
-            exit $LASTEXITCODE
+          $installDir = Join-Path $env:ProgramFiles "Windows IME Caret Indicator"
+          $uninstaller = Get-ChildItem $installDir -Filter "unins*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($uninstaller) {
+            $p = Start-Process -FilePath $uninstaller.FullName -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART" -Wait -PassThru
+            if ($p.ExitCode -ne 0) {
+              throw "Runtime-quality cleanup uninstall failed with exit code $($p.ExitCode)."
+            }
           }
 
       - name: Download immutable v0.1.0 installer
