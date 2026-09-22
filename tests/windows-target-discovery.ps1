@@ -600,9 +600,11 @@ function Test-ExplorerRename {
         }
 
         $renameToken = "wici-rename-" + [Guid]::NewGuid().ToString("N").Substring(0, 8)
-        # Explorer selects the basename when F2 rename mode opens. Typing the
-        # unique token directly avoids SendKeys Ctrl+A ambiguity while the
-        # subsequent filesystem rename remains the independent proof.
+        # The prior independently successful run proved this exact sequence
+        # reliably enters/edits the Explorer rename surface. The filesystem
+        # rename below remains the authoritative proof that editing was real.
+        $shell.SendKeys("^a")
+        Start-Sleep -Milliseconds 100
         $shell.SendKeys($renameToken)
         Start-Sleep -Milliseconds 250
 
@@ -746,7 +748,10 @@ function Test-VscodeEditor {
 
         for ($i = 0; $i -lt 120; $i++) {
             $process = Get-Process -Name "Code" -ErrorAction SilentlyContinue |
-                Where-Object { $_.MainWindowHandle -ne 0 } |
+                Where-Object {
+                    $_.MainWindowHandle -ne 0 -and
+                    $_.MainWindowTitle -like "*vscode-probe.txt*"
+                } |
                 Sort-Object StartTime -Descending |
                 Select-Object -First 1
             if ($process) {
@@ -764,21 +769,16 @@ function Test-VscodeEditor {
 
         $shell = Activate-Process -Process $process
         Start-Sleep -Milliseconds 700
-        $shell.SendKeys("^1")
-        Start-Sleep -Milliseconds 250
 
-        $process.Refresh()
-        if (-not [WiciTargetDiscoveryNative]::ClickWindowCenter(
-                $process.MainWindowHandle)) {
-            return [ordered]@{
-                status = "HARNESS_FOCUS_UNAVAILABLE"
-                process = $process.ProcessName
-                reason = "VS Code editor area could not be clicked."
-                focused = (Get-FocusedControlSnapshot)
-            }
-        }
+        # Ctrl+G is a global VS Code command. Entering line 1 and confirming
+        # returns keyboard focus to the active text editor without relying on
+        # screen coordinates or accessibility-role guessing.
+        $shell.SendKeys("^g")
+        Start-Sleep -Milliseconds 200
+        $shell.SendKeys("1")
+        $shell.SendKeys("{ENTER}")
+        Start-Sleep -Milliseconds 300
 
-        Start-Sleep -Milliseconds 250
         $shell.SendKeys("^a")
         Start-Sleep -Milliseconds 100
         $shell.SendKeys($marker)
