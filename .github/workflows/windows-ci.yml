@@ -228,61 +228,42 @@ jobs:
           $text = $text.Replace('-Name "WindowsImeCaretIndicator" -ErrorAction Stop', '-Name "WindowsImeCaretIndicator.ProgramFiles" -ErrorAction Stop')
           $text = $text.Replace('-Name "WindowsImeCaretIndicator" -Value $originalRunValue', '-Name "WindowsImeCaretIndicator.ProgramFiles" -Value $originalRunValue')
           $text = $text.Replace('-Name "WindowsImeCaretIndicator" -ErrorAction SilentlyContinue', '-Name "WindowsImeCaretIndicator.ProgramFiles" -ErrorAction SilentlyContinue')
-          $text = $text.Replace('    Write-TestSettings -StartWithWindows $true -Paused $false -Path $settingsPath', '    Write-Host "WICI_RUNTIME_STAGE=bootstrap"; Write-TestSettings -StartWithWindows $true -Paused $false -Path $settingsPath')
-          $text = $text.Replace('    $hostProcess = Start-Process -FilePath $ExecutablePath -ArgumentList "--test-host" -PassThru', '    Write-Host "WICI_RUNTIME_STAGE=start-test-host"; $hostProcess = Start-WiciRestrictedMediumProcess -FilePath $ExecutablePath -ArgumentList @("--test-host") -Role "test-host"')
-          $text = $text.Replace('    $product = Start-Process -FilePath $ExecutablePath -PassThru', '    Write-Host "WICI_RUNTIME_STAGE=start-product"; $product = Start-WiciRestrictedMediumProcess -FilePath $ExecutablePath -Role "product"')
-          $lines = @($text -split '\r?\n')
-          $secondaryIndex = [Array]::IndexOf(
-            $lines,
-            '    $secondary = Start-Process -FilePath $ExecutablePath -PassThru')
-          if ($secondaryIndex -lt 0) {
-            throw "Runtime-quality secondary-launch block was not found."
-          }
-          $expectedSecondary = @(
-            '    $secondary = Start-Process -FilePath $ExecutablePath -PassThru',
-            '    if (-not $secondary.WaitForExit(5000)) {',
-            '        throw "Second normal launch did not exit under the single-instance mutex."',
-            '    }',
-            '    if ($secondary.ExitCode -ne 0) {',
-            '        throw "Second normal launch exited with code $($secondary.ExitCode)."',
-            '    }'
-          )
-          for ($i = 0; $i -lt $expectedSecondary.Count; $i++) {
-            if ($lines[$secondaryIndex + $i] -ne $expectedSecondary[$i]) {
-              throw "Runtime-quality secondary-launch contract drifted at offset $i."
-            }
-          }
-          $replacementSecondary = @(
-            '    Write-Host "WICI_RUNTIME_STAGE=start-secondary"',
-            '    $secondaryResult = Invoke-WiciRestrictedMediumProcess -FilePath $ExecutablePath -Role "secondary" -TimeoutMilliseconds 5000',
-            '    if ($secondaryResult.ExitCode -ne 0) {',
-            '        throw "Second normal launch exited with code $($secondaryResult.ExitCode)."',
-            '    }',
-            '    $secondary = $null'
-          )
-          $beforeSecondary = $lines[0..($secondaryIndex - 1)]
-          $afterSecondary = $lines[($secondaryIndex + $expectedSecondary.Count)..($lines.Count - 1)]
-          $lines = @($beforeSecondary + $replacementSecondary + $afterSecondary)
-          $text = $lines -join [Environment]::NewLine
-          $text = $text.Replace('    $responsiveness = Measure-OverlayResponseLatency -Product $product -Shell $shell -SampleCount 20', '    Write-Host "WICI_RUNTIME_STAGE=latency"; $responsiveness = Measure-OverlayResponseLatency -Product $product -Shell $shell -SampleCount 20')
-          $text = $text.Replace('    $soak = Invoke-CaretSoak -Product $product -Shell $shell -DurationSeconds 180', '    Write-Host "WICI_RUNTIME_STAGE=soak"; $soak = Invoke-CaretSoak -Product $product -Shell $shell -DurationSeconds 180; Write-Host "WICI_RUNTIME_STAGE=soak-done"')
-          $text = $text.Replace('    $trayPause = Invoke-TrayMenuAction -Product $product -Shell $shell -Action "FirstEnabled"', '    Write-Host "WICI_RUNTIME_STAGE=tray-lifecycle"; $trayPause = Invoke-TrayMenuAction -Product $product -Shell $shell -Action "FirstEnabled"')
-          $launcherLine = '. "validation-harness/tests/run-medium-runtime-quality.ps1"'
-          $paramBlock = [regex]::Match($text, '(?ms)\Aparam\(.*?^\)\r?\n')
-          if (-not $paramBlock.Success) {
-            throw "Runtime-quality script parameter block was not found."
-          }
-          $text = $text.Insert($paramBlock.Length, $launcherLine + [Environment]::NewLine)
           Set-Content -LiteralPath $path -Value $text -Encoding UTF8
 
       - name: Validate v0.1.1 candidate overlay runtime quality as normal user integrity
         if: ${{ !startsWith(github.event.head_commit.message, 'security:') }}
         shell: pwsh
         run: |
+          . "validation-harness/tests/run-medium-runtime-quality.ps1"
           $exe = Resolve-Path "${env:ProgramFiles}\Windows IME Caret Indicator\WindowsImeCaretIndicator.exe"
           $runtimeScript = Resolve-Path "tests/runtime-quality-smoke.ps1"
-          Write-Host "WICI_RUNTIME_STAGE=high-harness-start"
-          & $runtimeScript.Path -ExecutablePath $exe.Path
+          $entry = Resolve-Path "validation-harness/tests/run-medium-runtime-quality-entry.ps1"
+          $pwsh = (Get-Command pwsh).Source
+          $log = Join-Path (Get-Location) "artifacts/runtime-quality-medium.log"
+          $result = Invoke-WiciRestrictedMediumProcess `
+            -FilePath $pwsh `
+            -ArgumentList @(
+              "-NoLogo",
+              "-NoProfile",
+              "-NonInteractive",
+              "-ExecutionPolicy",
+              "Bypass",
+              "-File",
+              $entry.Path,
+              "-RuntimeScriptPath",
+              $runtimeScript.Path,
+              "-ExecutablePath",
+              $exe.Path,
+              "-LogPath",
+              $log) `
+            -Role "runtime-quality-harness" `
+            -TimeoutMilliseconds 900000
+          if (Test-Path -LiteralPath $log) {
+            Get-Content -LiteralPath $log
+          }
+          if ($result.ExitCode -ne 0) {
+            throw "Medium-integrity runtime-quality harness failed with exit code $($result.ExitCode)."
+          }
 
       - name: Report runtime-quality evidence presence
         if: ${{ always() && !startsWith(github.event.head_commit.message, 'security:') }}

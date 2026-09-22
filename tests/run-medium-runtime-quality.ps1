@@ -501,12 +501,24 @@ function Invoke-WiciRestrictedMediumProcess {
     param(
         [Parameter(Mandatory = $true)]
         [string]$FilePath,
+        [string[]]$ArgumentList = @(),
         [string]$Role = "runtime",
         [int]$TimeoutMilliseconds = 5000
     )
 
     $resolved = (Resolve-Path -LiteralPath $FilePath).Path
     $commandLine = '"' + $resolved + '"'
+    foreach ($argument in $ArgumentList) {
+        if ($argument.Contains('"')) {
+            throw "Unsupported quote character in restricted-process argument."
+        }
+        if ($argument -match '\s') {
+            $commandLine += ' "' + $argument + '"'
+        }
+        else {
+            $commandLine += ' ' + $argument
+        }
+    }
 
     $result = [WiciRestrictedMediumRunner]::Start(
         $resolved,
