@@ -145,6 +145,13 @@ public static class WiciRuntimeNative
         UIntPtr extraInfo);
 
     [DllImport("user32.dll")]
+    private static extern void keybd_event(
+        byte virtualKey,
+        byte scanCode,
+        uint flags,
+        UIntPtr extraInfo);
+
+    [DllImport("user32.dll")]
     public static extern uint GetDpiForWindow(IntPtr hwnd);
 
     public static WiciWindowSnapshot[] GetVisibleTopLevelWindows(int pid)
@@ -241,6 +248,13 @@ public static class WiciRuntimeNative
             throw new InvalidOperationException("SetCursorPos failed.");
         mouse_event(MOUSEEVENTF_RIGHTDOWN, 0, 0, 0, UIntPtr.Zero);
         mouse_event(MOUSEEVENTF_RIGHTUP, 0, 0, 0, UIntPtr.Zero);
+    }
+
+    public static void SendKey(byte virtualKey)
+    {
+        const uint KEYEVENTF_KEYUP = 0x0002;
+        keybd_event(virtualKey, 0, 0, UIntPtr.Zero);
+        keybd_event(virtualKey, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
     }
 
     public static WiciRectSnapshot FindNotifyIconRect(int pid)
@@ -684,21 +698,21 @@ function Invoke-TrayMenuAction {
 
     switch ($Action) {
         "FirstEnabled" {
-            [System.Windows.Forms.SendKeys]::SendWait("{HOME}")
+            [WiciRuntimeNative]::SendKey(0x24)
             Start-Sleep -Milliseconds 80
-            [System.Windows.Forms.SendKeys]::SendWait("{ENTER}")
+            [WiciRuntimeNative]::SendKey(0x0D)
         }
         "Startup" {
-            [System.Windows.Forms.SendKeys]::SendWait("{END}")
+            [WiciRuntimeNative]::SendKey(0x23)
             Start-Sleep -Milliseconds 80
-            [System.Windows.Forms.SendKeys]::SendWait("{UP}")
+            [WiciRuntimeNative]::SendKey(0x26)
             Start-Sleep -Milliseconds 80
-            [System.Windows.Forms.SendKeys]::SendWait("{ENTER}")
+            [WiciRuntimeNative]::SendKey(0x0D)
         }
         "Exit" {
-            [System.Windows.Forms.SendKeys]::SendWait("{END}")
+            [WiciRuntimeNative]::SendKey(0x23)
             Start-Sleep -Milliseconds 80
-            [System.Windows.Forms.SendKeys]::SendWait("{ENTER}")
+            [WiciRuntimeNative]::SendKey(0x0D)
         }
     }
 
