@@ -5,6 +5,7 @@ on:
     branches:
       - v0.1.0-dev1
       - work/runtime-validation
+      - release/v0.1.1-turn43-validation
   workflow_dispatch:
 
 permissions:
@@ -16,8 +17,10 @@ jobs:
     timeout-minutes: 35
 
     steps:
-      - name: Checkout
+      - name: Checkout exact approved v0.1.1 candidate
         uses: actions/checkout@v4
+        with:
+          ref: c67977311d0cb3dc4a709b4c59e3a8245ec6c78d
 
       - name: Use .NET 10
         uses: actions/setup-dotnet@v4
