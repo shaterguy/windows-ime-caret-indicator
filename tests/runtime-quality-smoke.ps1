@@ -342,6 +342,113 @@ function Get-Probe {
     }
 }
 
+function Get-InputDiagnosticSnapshot {
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Diagnostics.Process]$HostProcess
+    )
+
+    $selectors = [ordered]@{
+        queueKeyDown = 1
+        queueKeyUp = 2
+        queueChar = 3
+        translatedKeyDown = 4
+        dispatchedKeyDown = 5
+        dispatchedKeyUp = 6
+        dispatchedChar = 7
+    }
+
+    $result = [ordered]@{}
+    foreach ($entry in $selectors.GetEnumerator()) {
+        $value = [WiciRuntimeNative]::SendMessageW(
+            $HostProcess.MainWindowHandle,
+            0x8004,
+            [IntPtr]$entry.Value,
+            [IntPtr]::Zero)
+        $result[$entry.Key] = $value.ToInt64()
+    }
+
+    return $result
+}
+
+function Get-EditAutomationValue {
+    param(
+        [Parameter(Mandatory = $true)]
+        [IntPtr]$EditHandle
+    )
+
+    try {
+        $element = [System.Windows.Automation.AutomationElement]::FromHandle(
+            $EditHandle)
+        if ($null -eq $element) {
+            return $null
+        }
+
+        $rawPattern = $element.GetCurrentPattern(
+            [System.Windows.Automation.ValuePattern]::Pattern)
+        if ($null -eq $rawPattern) {
+            return $null
+        }
+
+        return ([System.Windows.Automation.ValuePattern]$rawPattern).Current.Value
+    }
+    catch {
+        return $null
+    }
+}
+
+function Invoke-InputContinuityProbe {
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Diagnostics.Process]$HostProcess,
+        [Parameter(Mandatory = $true)]
+        [IntPtr]$EditHandle,
+        [Parameter(Mandatory = $true)]
+        [object]$Shell,
+        [Parameter(Mandatory = $true)]
+        [string]$Text
+    )
+
+    $foreground = [WiciRuntimeNative]::GetForegroundWindow()
+    $focused = [WiciRuntimeNative]::GetFocusedWindowForForeground()
+    if ($foreground -ne $HostProcess.MainWindowHandle -or
+        $focused -ne $EditHandle) {
+        throw "Input-continuity probe started without target foreground/edit focus."
+    }
+
+    $reset = [WiciRuntimeNative]::SendMessageW(
+        $HostProcess.MainWindowHandle,
+        0x8005,
+        [IntPtr]::Zero,
+        [IntPtr]::Zero)
+    if ($reset -eq [IntPtr]::Zero) {
+        throw "Unable to reset test-host input diagnostics."
+    }
+
+    $Shell.SendKeys("^a")
+    $Shell.SendKeys($Text)
+    Start-Sleep -Milliseconds 300
+
+    $snapshot = Get-InputDiagnosticSnapshot -HostProcess $HostProcess
+    if ($snapshot.queueKeyDown -le 0 -or
+        $snapshot.dispatchedKeyDown -le 0 -or
+        $snapshot.queueChar -lt $Text.Length -or
+        $snapshot.dispatchedChar -lt $Text.Length) {
+        throw ("Input messages did not reach and dispatch through the target edit. " +
+            ($snapshot | ConvertTo-Json -Compress))
+    }
+
+    $automationValue = Get-EditAutomationValue -EditHandle $EditHandle
+    if ($null -ne $automationValue -and $automationValue -ne $Text) {
+        throw "UI Automation value after typing was '$automationValue' instead of '$Text'."
+    }
+
+    return [ordered]@{
+        counters = $snapshot
+        automationValue = $automationValue
+    }
+}
+
 function Get-VisibleProductWindows {
     param([System.Diagnostics.Process]$Product)
 
@@ -539,6 +646,11 @@ try {
 
     $shell = New-Object -ComObject WScript.Shell
     $edit = Focus-TestHost -HostProcess $hostProcess -Shell $shell
+    $baselineInput = Invoke-InputContinuityProbe `
+        -HostProcess $hostProcess `
+        -EditHandle $edit `
+        -Shell $shell `
+        -Text "inputpass"
 
     $product = Start-Process -FilePath $ExecutablePath -PassThru
     $overlay = Wait-VisibleOverlay -Product $product
@@ -578,12 +690,24 @@ try {
         throw "Overlay presentation changed foreground or keyboard focus."
     }
 
-    $shell.SendKeys("^a")
-    $shell.SendKeys("overlaypass")
-    Start-Sleep -Milliseconds 250
-    $textAfterTyping = [WiciRuntimeNative]::ReadText($edit)
-    if ($textAfterTyping -ne "overlaypass") {
-        throw "Typing continuity failed while overlay was visible. Text='$textAfterTyping'."
+    $productInput = Invoke-InputContinuityProbe `
+        -HostProcess $hostProcess `
+        -EditHandle $edit `
+        -Shell $shell `
+        -Text "inputpass"
+
+    foreach ($counterName in @(
+            "queueKeyDown",
+            "queueKeyUp",
+            "queueChar",
+            "translatedKeyDown",
+            "dispatchedKeyDown",
+            "dispatchedKeyUp",
+            "dispatchedChar")) {
+        if ($productInput.counters[$counterName] -ne
+            $baselineInput.counters[$counterName]) {
+            throw "Input message count '$counterName' changed with the product running: baseline=$($baselineInput.counters[$counterName]), product=$($productInput.counters[$counterName])."
+        }
     }
 
     $overlay = Wait-VisibleOverlay -Product $product
@@ -731,7 +855,9 @@ try {
     $results.input = [ordered]@{
         foregroundPreserved = $true
         keyboardFocusPreserved = $true
-        typingContinuityText = $textAfterTyping
+        baseline = $baselineInput
+        productRunning = $productInput
+        messageCountsMatchedBaseline = $true
         singleInstance = $true
     }
     $results.stability = [ordered]@{

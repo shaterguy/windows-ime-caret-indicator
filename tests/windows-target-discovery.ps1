@@ -311,6 +311,26 @@ function Focus-NamedDescendantForRename {
             }
         }
 
+        $windowTitle = $Process.MainWindowTitle
+        if ([string]::IsNullOrWhiteSpace($windowTitle) -or
+            -not $Shell.AppActivate($windowTitle)) {
+            return [ordered]@{
+                success = $false
+                reason = "Explorer test window could not be activated by its exact title."
+                focused = (Get-FocusedControlSnapshot)
+            }
+        }
+        Start-Sleep -Milliseconds 150
+
+        if ([WiciTargetDiscoveryNative]::GetForegroundWindow() -ne
+            $Process.MainWindowHandle) {
+            return [ordered]@{
+                success = $false
+                reason = "Explorer test window did not become the foreground window."
+                focused = (Get-FocusedControlSnapshot)
+            }
+        }
+
         if ($null -ne $target) {
             try {
                 $selectionPattern = $null
@@ -322,10 +342,25 @@ function Focus-NamedDescendantForRename {
 
                 $target.SetFocus()
                 Start-Sleep -Milliseconds 200
-                $null = $Shell.AppActivate($Process.Id)
-                Start-Sleep -Milliseconds 150
+
+                $preRenameFocus = Get-FocusedControlSnapshot
+                if (-not $preRenameFocus.exists -or
+                    -not $preRenameFocus.hasKeyboardFocus -or
+                    $preRenameFocus.processId -ne $Process.Id -or
+                    $preRenameFocus.controlType -eq "ControlType.Window") {
+                    return [ordered]@{
+                        success = $false
+                        reason = "Explorer target item did not retain keyboard focus before F2."
+                        focused = $preRenameFocus
+                    }
+                }
             }
             catch {
+                return [ordered]@{
+                    success = $false
+                    reason = $_.Exception.Message
+                    focused = (Get-FocusedControlSnapshot)
+                }
             }
         }
         else {
