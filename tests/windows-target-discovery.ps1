@@ -47,6 +47,35 @@ public static class WiciTargetDiscoveryNative
         uint dwData,
         UIntPtr dwExtraInfo);
 
+    [DllImport("user32.dll")]
+    private static extern void keybd_event(
+        byte bVk,
+        byte bScan,
+        uint dwFlags,
+        UIntPtr dwExtraInfo);
+
+    public static void SendCtrlKey(byte virtualKey)
+    {
+        const byte VK_CONTROL = 0x11;
+        const uint KEYEVENTF_KEYUP = 0x0002;
+
+        keybd_event(VK_CONTROL, 0, 0, UIntPtr.Zero);
+        keybd_event(virtualKey, 0, 0, UIntPtr.Zero);
+        keybd_event(virtualKey, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+        keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+    }
+
+    public static bool ClickPoint(int x, int y)
+    {
+        const uint MOUSEEVENTF_LEFTDOWN = 0x0002;
+        const uint MOUSEEVENTF_LEFTUP = 0x0004;
+        if (!SetCursorPos(x, y))
+            return false;
+        mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, UIntPtr.Zero);
+        mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, UIntPtr.Zero);
+        return true;
+    }
+
     public static bool ClickWindowCenter(IntPtr hwnd)
     {
         const uint MOUSEEVENTF_LEFTDOWN = 0x0002;
@@ -62,12 +91,7 @@ public static class WiciTargetDiscoveryNative
 
         var x = rect.Left + (width / 2);
         var y = rect.Top + (height / 2);
-        if (!SetCursorPos(x, y))
-            return false;
-
-        mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, UIntPtr.Zero);
-        mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, UIntPtr.Zero);
-        return true;
+        return ClickPoint(x, y);
     }
 }
 "@
@@ -603,7 +627,7 @@ function Test-ExplorerRename {
         # The prior independently successful run proved this exact sequence
         # reliably enters/edits the Explorer rename surface. The filesystem
         # rename below remains the authoritative proof that editing was real.
-        $shell.SendKeys("^a")
+        [WiciTargetDiscoveryNative]::SendCtrlKey(0x41)
         Start-Sleep -Milliseconds 100
         $shell.SendKeys($renameToken)
         Start-Sleep -Milliseconds 250
@@ -710,6 +734,132 @@ function Get-WebView2RuntimeRegistration {
     }
 }
 
+function Focus-VscodeEditorElement {
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Diagnostics.Process]$Process
+    )
+
+    try {
+        $Process.Refresh()
+        $root = [System.Windows.Automation.AutomationElement]::FromHandle(
+            $Process.MainWindowHandle)
+        if ($null -eq $root) {
+            return [ordered]@{
+                success = $false
+                reason = "VS Code UI Automation root was unavailable."
+            }
+        }
+
+        $focusable = [System.Windows.Automation.PropertyCondition]::new(
+            [System.Windows.Automation.AutomationElement]::IsKeyboardFocusableProperty,
+            $true)
+        $elements = $root.FindAll(
+            [System.Windows.Automation.TreeScope]::Descendants,
+            $focusable)
+
+        $candidates = @()
+        foreach ($element in $elements) {
+            try {
+                $controlType = $element.Current.ControlType.ProgrammaticName
+                $name = $element.Current.Name
+                $automationId = $element.Current.AutomationId
+                $textPatternAvailable = $false
+                $rawText = $null
+                if ($element.TryGetCurrentPattern(
+                        [System.Windows.Automation.TextPattern]::Pattern,
+                        [ref]$rawText)) {
+                    $textPatternAvailable = $true
+                }
+
+                $score = 0
+                if ($controlType -in @("ControlType.Document", "ControlType.Edit")) {
+                    $score += 100
+                }
+                if ($textPatternAvailable) {
+                    $score += 70
+                }
+                if ($name -match "(?i)vscode-probe|text editor|editor") {
+                    $score += 50
+                }
+                if ($automationId -match "(?i)editor") {
+                    $score += 30
+                }
+
+                if ($score -gt 0) {
+                    $candidates += [pscustomobject]@{
+                        Element = $element
+                        Score = $score
+                        ControlType = $controlType
+                        Name = $name
+                        AutomationId = $automationId
+                        TextPatternAvailable = $textPatternAvailable
+                    }
+                }
+            }
+            catch {
+            }
+        }
+
+        $ordered = @($candidates | Sort-Object Score -Descending)
+        $diagnostics = @($ordered | Select-Object -First 12 | ForEach-Object {
+            [ordered]@{
+                score = $_.Score
+                controlType = $_.ControlType
+                name = $_.Name
+                automationId = $_.AutomationId
+                textPatternAvailable = $_.TextPatternAvailable
+            }
+        })
+
+        foreach ($candidate in $ordered) {
+            try {
+                $candidate.Element.SetFocus()
+                Start-Sleep -Milliseconds 200
+
+                $rect = $candidate.Element.Current.BoundingRectangle
+                if (-not $rect.IsEmpty -and
+                    $rect.Width -gt 4 -and
+                    $rect.Height -gt 4) {
+                    [void][WiciTargetDiscoveryNative]::ClickPoint(
+                        [int][Math]::Round($rect.Left + ($rect.Width / 2)),
+                        [int][Math]::Round($rect.Top + ($rect.Height / 2)))
+                    Start-Sleep -Milliseconds 200
+                }
+
+                return [ordered]@{
+                    success = $true
+                    chosen = [ordered]@{
+                        score = $candidate.Score
+                        controlType = $candidate.ControlType
+                        name = $candidate.Name
+                        automationId = $candidate.AutomationId
+                        textPatternAvailable = $candidate.TextPatternAvailable
+                    }
+                    candidates = $diagnostics
+                    focused = (Get-FocusedControlSnapshot)
+                }
+            }
+            catch {
+            }
+        }
+
+        return [ordered]@{
+            success = $false
+            reason = "No VS Code text-capable focusable UI Automation element accepted focus."
+            candidates = $diagnostics
+            focused = (Get-FocusedControlSnapshot)
+        }
+    }
+    catch {
+        return [ordered]@{
+            success = $false
+            reason = $_.Exception.Message
+            focused = (Get-FocusedControlSnapshot)
+        }
+    }
+}
+
 function Test-VscodeEditor {
     param([string]$VscodePath)
 
@@ -770,16 +920,16 @@ function Test-VscodeEditor {
         $shell = Activate-Process -Process $process
         Start-Sleep -Milliseconds 700
 
-        # Ctrl+G is a global VS Code command. Entering line 1 and confirming
-        # returns keyboard focus to the active text editor without relying on
-        # screen coordinates or accessibility-role guessing.
-        $shell.SendKeys("^g")
-        Start-Sleep -Milliseconds 200
-        $shell.SendKeys("1")
-        $shell.SendKeys("{ENTER}")
-        Start-Sleep -Milliseconds 300
+        $editorFocus = Focus-VscodeEditorElement -Process $process
+        if (-not $editorFocus.success) {
+            return [ordered]@{
+                status = "HARNESS_FOCUS_UNAVAILABLE"
+                process = $process.ProcessName
+                editorFocus = $editorFocus
+            }
+        }
 
-        $shell.SendKeys("^a")
+        [WiciTargetDiscoveryNative]::SendCtrlKey(0x41)
         Start-Sleep -Milliseconds 100
         $shell.SendKeys($marker)
         Start-Sleep -Milliseconds 300
@@ -787,7 +937,7 @@ function Test-VscodeEditor {
         $focusDuringEdit = Get-FocusedControlSnapshot
         $probe = Invoke-CaretProbe
 
-        $shell.SendKeys("^s")
+        [WiciTargetDiscoveryNative]::SendCtrlKey(0x53)
         $saved = $false
         for ($i = 0; $i -lt 40; $i++) {
             try {
@@ -806,6 +956,7 @@ function Test-VscodeEditor {
             return [ordered]@{
                 status = "HARNESS_EDIT_UNPROVEN"
                 process = $process.ProcessName
+                editorFocus = $editorFocus
                 focusDuringEdit = $focusDuringEdit
                 probe = $probe
                 reason = "Keyboard editing could not be independently proven by saving the marker to the opened file."
@@ -820,6 +971,7 @@ function Test-VscodeEditor {
             process = $process.ProcessName
             version = (& $VscodePath --version 2>$null | Select-Object -First 1)
             editConfirmed = $true
+            editorFocus = $editorFocus
             focusDuringEdit = $focusDuringEdit
             probe = $probe
         }
