@@ -143,7 +143,7 @@ internal static class LegacyV010Lifecycle
             initial.Save();
             StartupRegistration.ApplyForExecutable(
                 enabled: true,
-                currentExecutable);
+                executable: currentExecutable);
             return true;
         }
 
