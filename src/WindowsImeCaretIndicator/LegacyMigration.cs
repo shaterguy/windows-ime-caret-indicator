@@ -157,11 +157,11 @@ internal static class LegacyV010Migration
 
         var settings = File.Exists(AppSettings.SettingsPath)
             ? AppSettings.Load()
-            : DetermineMigratedSettings(
-                legacyOwned
-                    ? TryReadLegacySettings()
-                    : null,
-                legacyRunOwned);
+            : legacyOwned
+                ? DetermineMigratedSettings(
+                    TryReadLegacySettings(),
+                    legacyRunOwned)
+                : new AppSettings();
 
         settings.Save();
         StartupRegistration.Apply(
