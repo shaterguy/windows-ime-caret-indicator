@@ -714,10 +714,7 @@ try {
         $lowerToMedium,
         30000)
 
-    $mediumProbe = Parse-TokenProbeOutput (
-        -OutputPath $mediumOutputPath
-        -ExitCodePath $mediumExitPath
-        -Launch $launch)
+    $mediumProbe = Parse-TokenProbeOutput -OutputPath $mediumOutputPath -ExitCodePath $mediumExitPath -Launch $launch
 
     if (-not (Test-MediumIntegrity $mediumProbe.wrapperIntegrityRid)) {
         throw (
