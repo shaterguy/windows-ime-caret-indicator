@@ -156,6 +156,24 @@ jobs:
           path: artifacts/runtime-target-discovery.json
           if-no-files-found: warn
 
+      - name: Measure cross-integrity access to an elevated caret target
+        shell: pwsh
+        run: |
+          $exe = Resolve-Path "artifacts/win-x64/WindowsImeCaretIndicator.exe"
+          $host = Get-ChildItem "tests/WebView2CaretHost/bin/Release" -Recurse -Filter "WebView2CaretHost.exe" | Select-Object -First 1
+          if (-not $host) {
+            throw "WebView2 caret test host executable was not produced."
+          }
+          ./tests/cross-integrity-smoke.ps1 -ExecutablePath $exe.Path -WebView2HostPath $host.FullName
+
+      - name: Upload cross-integrity evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: WICI-cross-integrity-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/cross-integrity.json
+          if-no-files-found: error
+
       - name: Validate v0.1.1 candidate overlay runtime quality
         shell: pwsh
         run: |
