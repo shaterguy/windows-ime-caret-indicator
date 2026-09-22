@@ -1,0 +1,140 @@
+name: Publish v0.1.1
+
+on:
+  push:
+    branches:
+      - release/v0.1.1-publish
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      REPO: shaterguy/windows-ime-caret-indicator
+      TAG: v0.1.1
+      CANDIDATE_SHA: c67977311d0cb3dc4a709b4c59e3a8245ec6c78d
+      VALIDATION_RUN_ID: "35745967759"
+      VALIDATION_HEAD_SHA: f7f3788a956e8501790b174f5b685aceca0ae9e6
+      VALIDATION_BRANCH: release/v0.1.1-turn43-validation
+      ARTIFACT_NAME: WindowsImeCaretIndicator-win-x64
+      INSTALLER_NAME: WindowsImeCaretIndicator-Setup-0.1.1.exe
+      PORTABLE_NAME: WindowsImeCaretIndicator.exe
+      INSTALLER_SHA256: 67c384a9f2da155dc59217acb87e036130d0e842131b0a2519c98b8dc56cb30b
+      PORTABLE_SHA256: 0ed41403a2ad4745a61ed75014502bf38cd2ce5c1dffdb10d7b3cf1a50561f69
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Verify exact successful validation run
+        shell: bash
+        run: |
+          set -euo pipefail
+          status="$(gh api "repos/$REPO/actions/runs/$VALIDATION_RUN_ID" --jq '.status')"
+          conclusion="$(gh api "repos/$REPO/actions/runs/$VALIDATION_RUN_ID" --jq '.conclusion')"
+          head_sha="$(gh api "repos/$REPO/actions/runs/$VALIDATION_RUN_ID" --jq '.head_sha')"
+          head_branch="$(gh api "repos/$REPO/actions/runs/$VALIDATION_RUN_ID" --jq '.head_branch')"
+          if [[ "$status" != "completed" || "$conclusion" != "success" ]]; then
+            echo "Validation run is not completed/success: status=$status conclusion=$conclusion" >&2
+            exit 1
+          fi
+          if [[ "$head_sha" != "$VALIDATION_HEAD_SHA" || "$head_branch" != "$VALIDATION_BRANCH" ]]; then
+            echo "Validation identity mismatch: head_sha=$head_sha head_branch=$head_branch" >&2
+            exit 1
+          fi
+
+      - name: Download exact validated distribution artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          gh run download "$VALIDATION_RUN_ID" --repo "$REPO" --name "$ARTIFACT_NAME" --dir dist
+          test -f "dist/installer/$INSTALLER_NAME"
+          test -f "dist/win-x64/$PORTABLE_NAME"
+          echo "$INSTALLER_SHA256  dist/installer/$INSTALLER_NAME" | sha256sum -c -
+          echo "$PORTABLE_SHA256  dist/win-x64/$PORTABLE_NAME" | sha256sum -c -
+
+      - name: Verify canonical release source
+        shell: bash
+        run: |
+          set -euo pipefail
+          resolved="$(gh api "repos/$REPO/commits/$CANDIDATE_SHA" --jq '.sha')"
+          if [[ "$resolved" != "$CANDIDATE_SHA" ]]; then
+            echo "Canonical source mismatch: $resolved" >&2
+            exit 1
+          fi
+
+      - name: Create or verify exact v0.1.1 tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          if tag_sha="$(gh api "repos/$REPO/git/ref/tags/$TAG" --jq '.object.sha' 2>/dev/null)"; then
+            if [[ "$tag_sha" != "$CANDIDATE_SHA" ]]; then
+              echo "Existing tag points to unexpected SHA: $tag_sha" >&2
+              exit 1
+            fi
+          else
+            gh api --method POST "repos/$REPO/git/refs"               -f ref="refs/tags/$TAG"               -f sha="$CANDIDATE_SHA" >/dev/null
+          fi
+          final_tag_sha="$(gh api "repos/$REPO/git/ref/tags/$TAG" --jq '.object.sha')"
+          if [[ "$final_tag_sha" != "$CANDIDATE_SHA" ]]; then
+            echo "Tag readback mismatch: $final_tag_sha" >&2
+            exit 1
+          fi
+
+      - name: Create or verify GitHub Release
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > release-notes.md <<EOF
+          Windows IME Caret Indicator v0.1.1
+
+          Canonical source:
+          - $CANDIDATE_SHA
+
+          Validated distribution source:
+          - GitHub Actions run $VALIDATION_RUN_ID
+          - validation head $VALIDATION_HEAD_SHA
+
+          SHA-256:
+          - $INSTALLER_NAME: $INSTALLER_SHA256
+          - $PORTABLE_NAME: $PORTABLE_SHA256
+          EOF
+
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            echo "Release already exists; verifying it without overwriting."
+          else
+            gh release create "$TAG"               "dist/installer/$INSTALLER_NAME"               "dist/win-x64/$PORTABLE_NAME"               --repo "$REPO"               --title "Windows IME Caret Indicator v0.1.1"               --notes-file release-notes.md               --verify-tag
+          fi
+
+      - name: Verify release assets and direct downloads
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_json="$(gh api "repos/$REPO/releases/tags/$TAG")"
+          release_tag="$(jq -r '.tag_name' <<<"$release_json")"
+          if [[ "$release_tag" != "$TAG" ]]; then
+            echo "Release tag mismatch: $release_tag" >&2
+            exit 1
+          fi
+
+          installer_digest="$(jq -r --arg n "$INSTALLER_NAME" '.assets[] | select(.name == $n) | .digest // empty' <<<"$release_json")"
+          portable_digest="$(jq -r --arg n "$PORTABLE_NAME" '.assets[] | select(.name == $n) | .digest // empty' <<<"$release_json")"
+          if [[ "$installer_digest" != "sha256:$INSTALLER_SHA256" ]]; then
+            echo "Installer release digest mismatch: $installer_digest" >&2
+            exit 1
+          fi
+          if [[ "$portable_digest" != "sha256:$PORTABLE_SHA256" ]]; then
+            echo "Portable release digest mismatch: $portable_digest" >&2
+            exit 1
+          fi
+
+          installer_url="$(jq -r --arg n "$INSTALLER_NAME" '.assets[] | select(.name == $n) | .browser_download_url' <<<"$release_json")"
+          portable_url="$(jq -r --arg n "$PORTABLE_NAME" '.assets[] | select(.name == $n) | .browser_download_url' <<<"$release_json")"
+          test -n "$installer_url"
+          test -n "$portable_url"
+          echo "WICI_RELEASE_URL=$(jq -r '.html_url' <<<"$release_json")"
+          echo "WICI_INSTALLER_URL=$installer_url"
+          echo "WICI_PORTABLE_URL=$portable_url"
