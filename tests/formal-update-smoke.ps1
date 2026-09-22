@@ -151,6 +151,14 @@ if ($settings.StartWithWindows -ne $true -or $settings.Paused -ne $true) {
     throw "Migrated settings did not preserve v0.1.0 intent."
 }
 if (Test-Path -LiteralPath $legacyUninstallKey) {
+    $legacyUninstallState = Get-ItemProperty -LiteralPath $legacyUninstallKey
+    $legacyUninstallDiagnostic = [ordered]@{
+        DisplayName = $legacyUninstallState.DisplayName
+        DisplayVersion = $legacyUninstallState.DisplayVersion
+        InstallLocation = $legacyUninstallState.InstallLocation
+        UninstallString = $legacyUninstallState.UninstallString
+    } | ConvertTo-Json -Compress
+    Write-Error ("Legacy uninstall registration remains after migration: " + $legacyUninstallDiagnostic)
     throw "Legacy uninstall registration remains after migration."
 }
 if (Test-Path -LiteralPath $legacyExe) {
