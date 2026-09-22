@@ -22,6 +22,7 @@ $securePassword = ConvertTo-SecureString $testPassword -AsPlainText -Force
 $credential = New-Object System.Management.Automation.PSCredential(
     "$env:COMPUTERNAME\$testUser",
     $securePassword)
+$script:TestUserEnvironment = $null
 
 function Invoke-TestUser {
     param(
@@ -41,6 +42,9 @@ function Invoke-TestUser {
     }
     if (-not [string]::IsNullOrWhiteSpace($Arguments)) {
         $start.ArgumentList = $Arguments
+    }
+    if ($null -ne $script:TestUserEnvironment) {
+        $start.Environment = $script:TestUserEnvironment
     }
 
     $process = Start-Process @start
@@ -172,9 +176,40 @@ try {
     $profileKey = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\$sid"
     $profilePath = [Environment]::ExpandEnvironmentVariables(
         (Get-ItemProperty -LiteralPath $profileKey -Name ProfileImagePath).ProfileImagePath)
-    $legacyInstallDirectory = Join-Path $profilePath "AppData\Local\Programs\Windows IME Caret Indicator"
+    $localAppData = Join-Path $profilePath "AppData\Local"
+    $roamingAppData = Join-Path $profilePath "AppData\Roaming"
+    $profileTemp = Join-Path $localAppData "Temp"
+    New-Item -ItemType Directory -Path $localAppData -Force | Out-Null
+    New-Item -ItemType Directory -Path $roamingAppData -Force | Out-Null
+    New-Item -ItemType Directory -Path $profileTemp -Force | Out-Null
 
-    Invoke-TestUser -FilePath $publicLegacyInstaller -Arguments "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART"
+    $homeDrive = [IO.Path]::GetPathRoot($profilePath).TrimEnd('\')
+    $homePath = $profilePath.Substring($homeDrive.Length)
+    $script:TestUserEnvironment = @{
+        USERPROFILE = $profilePath
+        HOMEDRIVE = $homeDrive
+        HOMEPATH = $homePath
+        LOCALAPPDATA = $localAppData
+        APPDATA = $roamingAppData
+        TEMP = $profileTemp
+        TMP = $profileTemp
+        USERNAME = $testUser
+        USERDOMAIN = $env:COMPUTERNAME
+        PSModulePath = $null
+    }
+
+    $legacyInstallDirectory = Join-Path $localAppData "Programs\Windows IME Caret Indicator"
+    $legacyInstallLog = Join-Path $testRoot "legacy-install.log"
+    try {
+        $legacyArgs = '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG="' + $legacyInstallLog + '"'
+        Invoke-TestUser -FilePath $publicLegacyInstaller -Arguments $legacyArgs
+    }
+    catch {
+        if (Test-Path -LiteralPath $legacyInstallLog) {
+            Get-Content -LiteralPath $legacyInstallLog | Write-Host
+        }
+        throw
+    }
 
     $seedArgs = '-NoProfile -ExecutionPolicy Bypass -File "' + $workerPath + '" -Mode Seed -CandidatePath "' + $candidateExe + '"'
     Invoke-TestUser -FilePath $windowsPowerShell -Arguments $seedArgs
