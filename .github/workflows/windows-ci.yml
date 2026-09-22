@@ -276,9 +276,9 @@ jobs:
             throw "Program Files install directory grants write-capable access to an untrusted principal: $unsafeAce"
           }
 
-          & $installedExe --self-test
-          if ($LASTEXITCODE -ne 0) {
-            throw "Installed protected executable self-test failed with exit code $LASTEXITCODE."
+          $selfTestProcess = Start-Process -FilePath $installedExe -ArgumentList "--self-test" -Wait -PassThru
+          if ($selfTestProcess.ExitCode -ne 0) {
+            throw "Installed protected executable self-test failed with exit code $($selfTestProcess.ExitCode)."
           }
 
           $uninstaller = Get-ChildItem $installDir -Filter "unins*.exe" | Select-Object -First 1
