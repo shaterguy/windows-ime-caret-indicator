@@ -14,72 +14,64 @@ internal sealed class AppSettings
 
     public bool Paused { get; set; }
 
-    private static string SettingsDirectory =>
+    public string? InstallExecutablePath { get; set; }
+
+    private static string SettingsRoot =>
         Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            Environment.GetFolderPath(
+                Environment.SpecialFolder.LocalApplicationData),
             "WindowsImeCaretIndicator");
 
-    private static string SettingsPath =>
-        Path.Combine(SettingsDirectory, "settings.json");
+    internal static string SettingsDirectory =>
+        Path.Combine(
+            SettingsRoot,
+            "StateV2");
+
+    internal static string SettingsPath =>
+        Path.Combine(
+            SettingsDirectory,
+            "settings.json");
+
+    internal static string LegacySettingsPath =>
+        Path.Combine(
+            SettingsRoot,
+            "settings.json");
+
+    internal static bool CurrentSettingsFileExists =>
+        File.Exists(SettingsPath);
 
     internal static AppSettings Load()
     {
-        try
-        {
-            if (!File.Exists(SettingsPath))
-                return new AppSettings();
-
-            return JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(SettingsPath))
-                ?? new AppSettings();
-        }
-        catch
-        {
-            return new AppSettings();
-        }
+        return TryLoadCurrent(out var settings)
+            ? settings
+            : new AppSettings();
     }
 
-    internal void Save()
-    {
-        Directory.CreateDirectory(SettingsDirectory);
-        File.WriteAllText(
+    internal static bool TryLoadCurrent(
+        out AppSettings settings) =>
+        TryLoadFromPath(
             SettingsPath,
-            JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true }));
-    }
-}
+            out settings);
 
-internal static class StartupRegistration
-{
-    private const string RunKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
-    private const string ValueName = "WindowsImeCaretIndicator";
-
-    internal static void Apply(bool enabled)
+    internal static bool TryLoadFromPath(
+        string path,
+        out AppSettings settings)
     {
-        using var key = Registry.CurrentUser.CreateSubKey(RunKeyPath, writable: true)
-            ?? throw new InvalidOperationException("Unable to open the user startup registry key.");
+        settings = new AppSettings();
 
-        if (!enabled)
-        {
-            key.DeleteValue(ValueName, throwOnMissingValue: false);
-            return;
-        }
-
-        var executable = Environment.ProcessPath;
-        if (string.IsNullOrWhiteSpace(executable))
-            throw new InvalidOperationException("The executable path is unavailable.");
-
-        key.SetValue(ValueName, Quote(executable), RegistryValueKind.String);
-    }
-
-    internal static bool IsRegistered()
-    {
         try
         {
-            using var key = Registry.CurrentUser.OpenSubKey(RunKeyPath, writable: false);
-            var value = key?.GetValue(ValueName) as string;
-            var executable = Environment.ProcessPath;
-            return !string.IsNullOrWhiteSpace(value) &&
-                   !string.IsNullOrWhiteSpace(executable) &&
-                   string.Equals(value, Quote(executable), StringComparison.OrdinalIgnoreCase);
+            if (!File.Exists(path))
+                return false;
+
+            var loaded =
+                JsonSerializer.Deserialize<AppSettings>(
+                    File.ReadAllText(path));
+            if (loaded is null)
+                return false;
+
+            settings = loaded;
+            return true;
         }
         catch
         {
@@ -87,7 +79,239 @@ internal static class StartupRegistration
         }
     }
 
-    private static string Quote(string value) => $"\"{value}\"";
+    internal void Save()
+    {
+        var executable =
+            Environment.ProcessPath;
+        if (!ElevationSupport.IsElevated &&
+            !string.IsNullOrWhiteSpace(executable))
+        {
+            InstallExecutablePath =
+                Path.GetFullPath(executable);
+        }
+
+        Directory.CreateDirectory(
+            SettingsDirectory);
+
+        var temporaryPath =
+            SettingsPath + ".tmp-" +
+            Guid.NewGuid().ToString("N");
+
+        try
+        {
+            File.WriteAllText(
+                temporaryPath,
+                JsonSerializer.Serialize(
+                    this,
+                    new JsonSerializerOptions
+                    {
+                        WriteIndented = true
+                    }));
+
+            File.Move(
+                temporaryPath,
+                SettingsPath,
+                overwrite: true);
+        }
+        finally
+        {
+            try
+            {
+                if (File.Exists(temporaryPath))
+                    File.Delete(temporaryPath);
+            }
+            catch
+            {
+            }
+        }
+    }
+
+    internal static void DeleteCurrentState()
+    {
+        try
+        {
+            if (File.Exists(SettingsPath))
+                File.Delete(SettingsPath);
+        }
+        catch
+        {
+        }
+
+        try
+        {
+            if (Directory.Exists(
+                    SettingsDirectory) &&
+                !Directory.EnumerateFileSystemEntries(
+                    SettingsDirectory).Any())
+            {
+                Directory.Delete(
+                    SettingsDirectory);
+            }
+        }
+        catch
+        {
+        }
+    }
+}
+
+internal static class StartupRegistration
+{
+    private const string RunKeyPath =
+        @"Software\Microsoft\Windows\CurrentVersion\Run";
+
+    internal const string ValueName =
+        "WindowsImeCaretIndicator.v2";
+
+    internal const string LegacyValueName =
+        "WindowsImeCaretIndicator";
+
+    internal static void Apply(
+        bool enabled)
+    {
+        var executable =
+            Environment.ProcessPath;
+        if (string.IsNullOrWhiteSpace(executable))
+        {
+            throw new InvalidOperationException(
+                "The executable path is unavailable.");
+        }
+
+        ApplyForExecutable(
+            enabled,
+            executable);
+    }
+
+    internal static void ApplyForExecutable(
+        bool enabled,
+        string executable)
+    {
+        if (string.IsNullOrWhiteSpace(
+                executable))
+        {
+            throw new ArgumentException(
+                "Executable path is required.",
+                nameof(executable));
+        }
+
+        using var key =
+            Registry.CurrentUser.CreateSubKey(
+                RunKeyPath,
+                writable: true)
+            ?? throw new InvalidOperationException(
+                "Unable to open the user startup registry key.");
+
+        if (!enabled)
+        {
+            key.DeleteValue(
+                ValueName,
+                throwOnMissingValue: false);
+            return;
+        }
+
+        key.SetValue(
+            ValueName,
+            Quote(Path.GetFullPath(executable)),
+            RegistryValueKind.String);
+    }
+
+    internal static bool IsRegistered()
+    {
+        var executable =
+            Environment.ProcessPath;
+        return !string.IsNullOrWhiteSpace(
+                   executable) &&
+               IsNamedValueForExecutable(
+                   ValueName,
+                   executable);
+    }
+
+    internal static string? ReadNamedValue(
+        string valueName)
+    {
+        try
+        {
+            using var key =
+                Registry.CurrentUser.OpenSubKey(
+                    RunKeyPath,
+                    writable: false);
+            return key?.GetValue(
+                valueName) as string;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    internal static bool IsNamedValueForExecutable(
+        string valueName,
+        string executable)
+    {
+        if (string.IsNullOrWhiteSpace(
+                executable))
+        {
+            return false;
+        }
+
+        try
+        {
+            var value =
+                ReadNamedValue(valueName);
+            return !string.IsNullOrWhiteSpace(
+                       value) &&
+                   string.Equals(
+                       value,
+                       Quote(
+                           Path.GetFullPath(
+                               executable)),
+                       StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    internal static bool RemoveNamedValueIfMatches(
+        string valueName,
+        string executable)
+    {
+        if (!IsNamedValueForExecutable(
+                valueName,
+                executable))
+        {
+            return false;
+        }
+
+        using var key =
+            Registry.CurrentUser.OpenSubKey(
+                RunKeyPath,
+                writable: true);
+        if (key is null)
+            return false;
+
+        var value =
+            key.GetValue(
+                valueName) as string;
+        if (!string.Equals(
+                value,
+                Quote(
+                    Path.GetFullPath(
+                        executable)),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        key.DeleteValue(
+            valueName,
+            throwOnMissingValue: false);
+        return true;
+    }
+
+    internal static string Quote(
+        string value) =>
+        $"\"{value}\"";
 }
 
 internal sealed class IndicatorApplicationContext : ApplicationContext
