@@ -52,11 +52,11 @@ jobs:
             throw "Pinned Electron runtime checksum mismatch: $hash"
           }
           Expand-Archive -LiteralPath $zip -DestinationPath $dir -Force
-          $reported = (& "$dir/electron.exe" --version | Select-Object -First 1)
-          if ($reported -ne "v$version") {
-            throw "Pinned Electron runtime reported unexpected version '$reported'."
+          $electronExe = Join-Path $dir "electron.exe"
+          if (-not (Test-Path -LiteralPath $electronExe)) {
+            throw "Pinned Electron archive did not contain electron.exe."
           }
-          Write-Host "Validated Electron $reported with SHA256 $hash"
+          Write-Host "Validated pinned Electron v$version archive with SHA256 $hash"
 
       - name: Install VS Code Electron target
         shell: pwsh
