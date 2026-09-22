@@ -634,7 +634,7 @@ function Wait-RunRegistration {
     for ($i = 0; $i -lt 30; $i++) {
         $value = $null
         try {
-            $value = Get-ItemPropertyValue -Path $RunKey -Name "WindowsImeCaretIndicator" -ErrorAction Stop
+            $value = Get-ItemPropertyValue -Path $RunKey -Name "WindowsImeCaretIndicator.ProgramFiles" -ErrorAction Stop
         }
         catch {
         }
