@@ -166,6 +166,20 @@ function Get-FocusedControlSnapshot {
             }
         }
 
+        $valuePatternAvailable = $false
+        $valueIsReadOnly = $null
+        try {
+            $rawValuePattern = $null
+            if ($focused.TryGetCurrentPattern(
+                    [System.Windows.Automation.ValuePattern]::Pattern,
+                    [ref]$rawValuePattern)) {
+                $valuePatternAvailable = $true
+                $valueIsReadOnly = ([System.Windows.Automation.ValuePattern]$rawValuePattern).Current.IsReadOnly
+            }
+        }
+        catch {
+        }
+
         return [ordered]@{
             exists = $true
             hasKeyboardFocus = [bool]$focused.Current.HasKeyboardFocus
@@ -174,6 +188,8 @@ function Get-FocusedControlSnapshot {
             automationId = $focused.Current.AutomationId
             nativeWindowHandle = $focused.Current.NativeWindowHandle
             processId = $focused.Current.ProcessId
+            valuePatternAvailable = $valuePatternAvailable
+            valueIsReadOnly = $valueIsReadOnly
         }
     }
     catch {
@@ -185,14 +201,29 @@ function Get-FocusedControlSnapshot {
     }
 }
 
+function Test-EditableFocusSnapshot {
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Snapshot
+    )
+
+    return $Snapshot.exists -and
+        $Snapshot.hasKeyboardFocus -and
+        (
+            $Snapshot.controlType -eq "ControlType.Edit" -or
+            (
+                $Snapshot.valuePatternAvailable -eq $true -and
+                $Snapshot.valueIsReadOnly -eq $false
+            )
+        )
+}
+
 function Wait-FocusedEdit {
     param([int]$Attempts = 30)
 
     for ($i = 0; $i -lt $Attempts; $i++) {
         $snapshot = Get-FocusedControlSnapshot
-        if ($snapshot.exists -and
-            $snapshot.hasKeyboardFocus -and
-            $snapshot.controlType -eq "ControlType.Edit") {
+        if (Test-EditableFocusSnapshot -Snapshot $snapshot) {
             return $snapshot
         }
         Start-Sleep -Milliseconds 100
@@ -397,9 +428,7 @@ function Focus-NamedDescendantForRename {
         $Shell.SendKeys("{F2}")
         $focused = Wait-FocusedEdit -Attempts 40
 
-        if ($focused.exists -and
-            $focused.hasKeyboardFocus -and
-            $focused.controlType -eq "ControlType.Edit") {
+        if (Test-EditableFocusSnapshot -Snapshot $focused) {
             return [ordered]@{
                 success = $true
                 focused = $focused
