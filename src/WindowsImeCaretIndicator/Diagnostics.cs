@@ -97,6 +97,7 @@ internal static class NativeTestHost
     private const uint WmWiciQueryInputDiagnostic = 0x8004;
     private const uint WmWiciResetInputDiagnostics = 0x8005;
     private const uint WmWiciFocusEdit = 0x8006;
+    private const uint WmWiciFocusNonText = 0x8007;
     private const uint WmKeyUp = 0x0101;
     private const uint WmChar = 0x0102;
     private static int _queueKeyDown;
@@ -107,6 +108,7 @@ internal static class NativeTestHost
     private static int _dispatchedKeyUp;
     private static int _dispatchedChar;
     private static nint _editWindow;
+    private static nint _buttonWindow;
 
     [ComImport]
     [Guid("71C6E74C-0F28-11D8-A82A-00065B84435C")]
@@ -180,6 +182,26 @@ internal static class NativeTestHost
                 $"CreateWindowExW(EDIT) failed: {Marshal.GetLastWin32Error()}");
 
         _editWindow = edit;
+
+        var button = Native.CreateWindowExW(
+            0,
+            "BUTTON",
+            "Non-text control",
+            Native.WsChild | Native.WsVisible | Native.WsTabStop,
+            25,
+            110,
+            180,
+            32,
+            window,
+            (nint)1002,
+            module,
+            nint.Zero);
+
+        if (button == nint.Zero)
+            throw new InvalidOperationException(
+                "CreateWindowExW(BUTTON) failed.");
+
+        _buttonWindow = button;
         _ = Native.SetFocus(edit);
 
         if (activateKorean)
@@ -430,6 +452,15 @@ internal static class NativeTestHost
                 return nint.Zero;
 
             _ = Native.SetFocus(_editWindow);
+            return (nint)1;
+        }
+
+        if (message == WmWiciFocusNonText)
+        {
+            if (_buttonWindow == nint.Zero)
+                return nint.Zero;
+
+            _ = Native.SetFocus(_buttonWindow);
             return (nint)1;
         }
 

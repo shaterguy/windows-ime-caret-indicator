@@ -51,12 +51,17 @@ internal static class ProgramV2
             return DiagnosticRunner.Run();
         }
 
-        using var singleInstance = new Mutex(
-            initiallyOwned: true,
-            name: @"Local\WindowsImeCaretIndicator",
-            createdNew: out var createdNew);
+        var waitForInstance = args.Contains(
+            "--wait-for-instance",
+            StringComparer.OrdinalIgnoreCase);
 
-        if (!createdNew)
+        using var singleInstance = SingleInstanceLease.TryAcquire(
+            @"Local\WindowsImeCaretIndicator",
+            waitForInstance
+                ? TimeSpan.FromSeconds(15)
+                : TimeSpan.Zero);
+
+        if (singleInstance is null)
             return 0;
 
         Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);

@@ -231,10 +231,41 @@ internal static class SelfTests
                     2)),
             errors);
 
+        Check("elevation restart requires explicit runas consent", () =>
+        {
+            var info = ElevationSupport.CreateRestartStartInfo(
+                @"C:\Program Files\WICI\WindowsImeCaretIndicator.exe");
+            Equal("runas", info.Verb);
+            Equal(true, info.UseShellExecute);
+            Equal("--wait-for-instance", info.Arguments);
+        }, errors);
+
+        Check("single instance lease excludes a second thread", () =>
+        {
+            var name = @"Local\WiciSelfTest-" + Guid.NewGuid().ToString("N");
+            using var first = SingleInstanceLease.TryAcquire(
+                name,
+                TimeSpan.Zero)
+                ?? throw new InvalidOperationException(
+                    "first lease was not acquired");
+
+            var secondAcquired = Task.Run(() =>
+            {
+                using var second = SingleInstanceLease.TryAcquire(
+                    name,
+                    TimeSpan.Zero);
+                return second is not null;
+            }).GetAwaiter().GetResult();
+
+            if (secondAcquired)
+                throw new InvalidOperationException(
+                    "second thread acquired the owned mutex");
+        }, errors);
+
         foreach (var error in errors)
             Console.Error.WriteLine(error);
 
-        const int total = 19;
+        const int total = 21;
         Console.WriteLine($"{total - errors.Count}/{total} tests passed.");
         return errors.Count == 0 ? 0 : 1;
     }

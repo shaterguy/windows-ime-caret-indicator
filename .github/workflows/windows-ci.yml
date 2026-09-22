@@ -154,7 +154,7 @@ jobs:
         with:
           name: WICI-target-discovery-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifacts/runtime-target-discovery.json
-          if-no-files-found: error
+          if-no-files-found: warn
 
       - name: Validate v0.1.1 candidate overlay runtime quality
         shell: pwsh

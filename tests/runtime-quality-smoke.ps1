@@ -654,17 +654,20 @@ function Wait-SettingsState {
     throw "Settings did not reach StartWithWindows=$StartWithWindows Paused=$Paused."
 }
 
-function Invoke-TrayMenuItem {
+function Invoke-TrayMenuAction {
     param(
         [Parameter(Mandatory = $true)]
         [System.Diagnostics.Process]$Product,
         [Parameter(Mandatory = $true)]
-        [string]$Name
+        [object]$Shell,
+        [Parameter(Mandatory = $true)]
+        [ValidateSet("FirstEnabled", "Startup", "Exit")]
+        [string]$Action
     )
 
     $Product.Refresh()
     if ($Product.HasExited) {
-        throw "Product exited before tray action '$Name'."
+        throw "Product exited before tray action '$Action'."
     }
 
     $rect = [WiciRuntimeNative]::FindNotifyIconRect($Product.Id)
@@ -675,71 +678,141 @@ function Invoke-TrayMenuItem {
     $x = [Math]::Floor(($rect.Left + $rect.Right) / 2)
     $y = [Math]::Floor(($rect.Top + $rect.Bottom) / 2)
     [WiciRuntimeNative]::RightClick($x, $y)
+    Start-Sleep -Milliseconds 250
 
-    $item = $null
-    for ($i = 0; $i -lt 30; $i++) {
-        $nameCondition = [System.Windows.Automation.PropertyCondition]::new(
-            [System.Windows.Automation.AutomationElement]::NameProperty,
-            $Name)
-        $processCondition = [System.Windows.Automation.PropertyCondition]::new(
-            [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
-            $Product.Id)
-        $condition = [System.Windows.Automation.AndCondition]::new(
-            @($nameCondition, $processCondition))
-        $item = [System.Windows.Automation.AutomationElement]::RootElement.FindFirst(
-            [System.Windows.Automation.TreeScope]::Descendants,
-            $condition)
-        if ($null -ne $item) {
-            break
+    $visibleAfterOpen = @(Get-VisibleProductWindows -Product $Product)
+
+    switch ($Action) {
+        "FirstEnabled" {
+            $Shell.SendKeys("{HOME}")
+            Start-Sleep -Milliseconds 80
+            $Shell.SendKeys("{ENTER}")
         }
-        Start-Sleep -Milliseconds 100
-    }
-
-    if ($null -eq $item) {
-        throw "Tray menu item '$Name' was not exposed through UI Automation."
-    }
-
-    $invoked = $false
-    try {
-        $rawInvoke = $null
-        if ($item.TryGetCurrentPattern(
-                [System.Windows.Automation.InvokePattern]::Pattern,
-                [ref]$rawInvoke)) {
-            ([System.Windows.Automation.InvokePattern]$rawInvoke).Invoke()
-            $invoked = $true
+        "Startup" {
+            $Shell.SendKeys("{END}")
+            Start-Sleep -Milliseconds 80
+            $Shell.SendKeys("{UP}")
+            Start-Sleep -Milliseconds 80
+            $Shell.SendKeys("{ENTER}")
         }
-    }
-    catch {
-    }
-
-    if (-not $invoked) {
-        try {
-            $rawLegacy = $null
-            if ($item.TryGetCurrentPattern(
-                    [System.Windows.Automation.LegacyIAccessiblePattern]::Pattern,
-                    [ref]$rawLegacy)) {
-                ([System.Windows.Automation.LegacyIAccessiblePattern]$rawLegacy).DoDefaultAction()
-                $invoked = $true
-            }
-        }
-        catch {
+        "Exit" {
+            $Shell.SendKeys("{END}")
+            Start-Sleep -Milliseconds 80
+            $Shell.SendKeys("{ENTER}")
         }
     }
 
-    if (-not $invoked) {
-        throw "Tray menu item '$Name' did not support an invokable accessibility pattern."
-    }
-
-    Start-Sleep -Milliseconds 150
+    Start-Sleep -Milliseconds 200
     return [ordered]@{
-        name = $Name
+        action = $Action
         iconRect = [ordered]@{
             left = $rect.Left
             top = $rect.Top
             right = $rect.Right
             bottom = $rect.Bottom
         }
-        invoked = $true
+        visibleProductWindowsAfterOpen = $visibleAfterOpen.Count
+        physicalRightClick = $true
+        keyboardNavigation = $true
+    }
+}
+
+function Wait-NoVisibleOverlay {
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Diagnostics.Process]$Product,
+        [int]$Attempts = 40,
+        [int]$StableSamples = 4
+    )
+
+    $stable = 0
+    for ($i = 0; $i -lt $Attempts; $i++) {
+        $windows = @(Get-VisibleProductWindows -Product $Product)
+        if ($windows.Count -eq 0) {
+            $stable++
+            if ($stable -ge $StableSamples) {
+                return
+            }
+        }
+        else {
+            $stable = 0
+        }
+        Start-Sleep -Milliseconds 50
+    }
+
+    throw "A visible product window remained after focus moved to a non-text or paused state."
+}
+
+function Measure-OverlayResponseLatency {
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Diagnostics.Process]$Product,
+        [Parameter(Mandatory = $true)]
+        [object]$Shell,
+        [int]$SampleCount = 20
+    )
+
+    $Shell.SendKeys("{END}")
+    Start-Sleep -Milliseconds 150
+    $null = Wait-VisibleOverlay -Product $Product
+
+    $samples = @()
+    for ($i = 0; $i -lt $SampleCount; $i++) {
+        $before = Wait-VisibleOverlay -Product $Product
+        $key = if (($i % 2) -eq 0) { "{HOME}" } else { "{END}" }
+        $watch = [Diagnostics.Stopwatch]::StartNew()
+        $Shell.SendKeys($key)
+
+        $elapsed = $null
+        while ($watch.ElapsedMilliseconds -lt 500) {
+            $windows = @(Get-VisibleProductWindows -Product $Product)
+            if ($windows.Count -gt 1) {
+                throw "More than one visible product window appeared during latency measurement."
+            }
+            if ($windows.Count -eq 1) {
+                $current = $windows[0]
+                if ($current.Left -ne $before.Left -or
+                    $current.Top -ne $before.Top -or
+                    $current.Right -ne $before.Right -or
+                    $current.Bottom -ne $before.Bottom) {
+                    $elapsed = [double]$watch.Elapsed.TotalMilliseconds
+                    break
+                }
+            }
+            Start-Sleep -Milliseconds 2
+        }
+        $watch.Stop()
+
+        if ($null -eq $elapsed) {
+            throw "Overlay did not follow a HOME/END caret movement within 500 ms."
+        }
+
+        $samples += [Math]::Round($elapsed, 3)
+        Start-Sleep -Milliseconds 40
+    }
+
+    $sorted = @($samples | Sort-Object)
+    $p95Index = [Math]::Max(
+        0,
+        [Math]::Min(
+            $sorted.Count - 1,
+            [Math]::Ceiling($sorted.Count * 0.95) - 1))
+    $p95 = [double]$sorted[$p95Index]
+    $average = [double](($samples | Measure-Object -Average).Average)
+    $maximum = [double](($samples | Measure-Object -Maximum).Maximum)
+
+    if ($p95 -gt 100.0) {
+        throw "Overlay response p95 exceeded the <=100 ms target: $([Math]::Round($p95, 3)) ms."
+    }
+
+    return [ordered]@{
+        sampleCount = $samples.Count
+        samplesMs = @($samples)
+        averageMs = [Math]::Round($average, 3)
+        p95Ms = [Math]::Round($p95, 3)
+        maxMs = [Math]::Round($maximum, 3)
+        targetP95Ms = 100
+        passed = $true
     }
 }
 
@@ -992,6 +1065,26 @@ try {
     $overlay = Wait-VisibleOverlay -Product $product
     $visual = Save-OverlayEvidence -Overlay $overlay -Path $screenshotPath
 
+    $responsiveness = Measure-OverlayResponseLatency -Product $product -Shell $shell -SampleCount 20
+
+    $focusNonText = [WiciRuntimeNative]::SendMessageW(
+        $hostProcess.MainWindowHandle,
+        0x8007,
+        [IntPtr]::Zero,
+        [IntPtr]::Zero)
+    if ($focusNonText -eq [IntPtr]::Zero) {
+        throw "Test host could not focus its actual non-text BUTTON control."
+    }
+    Start-Sleep -Milliseconds 100
+    $nonTextFocus = [WiciRuntimeNative]::GetFocusedWindowForForeground()
+    if ($nonTextFocus -eq [IntPtr]::Zero -or $nonTextFocus -eq $edit) {
+        throw "Non-text BUTTON focus was not independently observed."
+    }
+    Wait-NoVisibleOverlay -Product $product
+
+    $edit = Focus-TestHost -HostProcess $hostProcess -Shell $shell
+    $null = Wait-VisibleOverlay -Product $product
+
     $shell.SendKeys("{HOME}")
     Start-Sleep -Milliseconds 250
     $beforeClickProbe = Get-Probe
@@ -1141,7 +1234,10 @@ try {
         productRunning = $productInput
         messageCountsMatchedBaseline = $true
         singleInstance = $true
+        nonTextControlHidden = $true
+        nonTextFocusedHandle = $nonTextFocus.ToInt64()
     }
+    $results.responsiveness = $responsiveness
     $results.stability = [ordered]@{
         stressIterations = 160
         handleDelta = $handleDelta
@@ -1199,24 +1295,24 @@ try {
     $null = Wait-VisibleOverlay -Product $product
     $results.resumePersisted = $true
 
-    $trayPause = Invoke-TrayMenuItem -Product $product -Name "표시 일시 정지"
+    $trayPause = Invoke-TrayMenuAction -Product $product -Shell $shell -Action "FirstEnabled"
     $null = Wait-SettingsState -Path $settingsPath -StartWithWindows $true -Paused $true
-    Assert-NoVisibleOverlay -Product $product
+    Wait-NoVisibleOverlay -Product $product
 
-    $trayResume = Invoke-TrayMenuItem -Product $product -Name "표시 재개"
+    $trayResume = Invoke-TrayMenuAction -Product $product -Shell $shell -Action "FirstEnabled"
     $null = Wait-SettingsState -Path $settingsPath -StartWithWindows $true -Paused $false
     $edit = Focus-TestHost -HostProcess $hostProcess -Shell $shell
     $null = Wait-VisibleOverlay -Product $product
 
-    $trayStartupOff = Invoke-TrayMenuItem -Product $product -Name "Windows 시작 시 자동 실행"
+    $trayStartupOff = Invoke-TrayMenuAction -Product $product -Shell $shell -Action "Startup"
     $null = Wait-SettingsState -Path $settingsPath -StartWithWindows $false -Paused $false
     $null = Wait-RunRegistration -RunKey $runKey -ExpectedPresent $false
 
-    $trayStartupOn = Invoke-TrayMenuItem -Product $product -Name "Windows 시작 시 자동 실행"
+    $trayStartupOn = Invoke-TrayMenuAction -Product $product -Shell $shell -Action "Startup"
     $null = Wait-SettingsState -Path $settingsPath -StartWithWindows $true -Paused $false
     $null = Wait-RunRegistration -RunKey $runKey -ExpectedPresent $true -ExpectedPath $ExecutablePath
 
-    $trayExit = Invoke-TrayMenuItem -Product $product -Name "종료"
+    $trayExit = Invoke-TrayMenuAction -Product $product -Shell $shell -Action "Exit"
     if (-not $product.WaitForExit(5000)) {
         throw "Product did not exit after invoking the actual tray Exit menu item."
     }

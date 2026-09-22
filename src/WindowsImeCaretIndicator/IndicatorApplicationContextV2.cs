@@ -11,6 +11,7 @@ internal sealed class IndicatorApplicationContextV2 : ApplicationContext
     private readonly NotifyIcon _trayIcon;
     private readonly ToolStripMenuItem _pauseItem;
     private readonly ToolStripMenuItem _resumeItem;
+    private readonly ToolStripMenuItem _elevateItem;
     private readonly ToolStripMenuItem _startupItem;
     private readonly System.Windows.Forms.Timer _coalesceTimer;
     private readonly System.Windows.Forms.Timer _fallbackTimer;
@@ -40,6 +41,16 @@ internal sealed class IndicatorApplicationContextV2 : ApplicationContext
             Visible = _paused
         };
 
+        _elevateItem = new ToolStripMenuItem(
+            ElevationSupport.IsElevated
+                ? "관리자 권한으로 실행 중"
+                : "관리자 권한으로 다시 시작",
+            null,
+            (_, _) => RestartElevated())
+        {
+            Enabled = !ElevationSupport.IsElevated
+        };
+
         _startupItem = new ToolStripMenuItem(
             "Windows 시작 시 자동 실행",
             null,
@@ -52,6 +63,8 @@ internal sealed class IndicatorApplicationContextV2 : ApplicationContext
         var menu = new ContextMenuStrip();
         menu.Items.Add(_pauseItem);
         menu.Items.Add(_resumeItem);
+        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add(_elevateItem);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(_startupItem);
         menu.Items.Add(new ToolStripSeparator());
@@ -203,6 +216,15 @@ internal sealed class IndicatorApplicationContextV2 : ApplicationContext
             _overlay.Dismiss();
         else
             RequestRefresh();
+    }
+
+    private void RestartElevated()
+    {
+        if (_disposed || ElevationSupport.IsElevated)
+            return;
+
+        if (ElevationSupport.TryRestartElevated())
+            ExitThread();
     }
 
     private void ToggleStartup()
