@@ -130,7 +130,22 @@ internal static class LegacyV010Lifecycle
             legacyUninstallOwned;
 
         if (!hasLegacyState)
+        {
+            if (currentSettingsExists)
+                return true;
+
+            var initial = new AppSettings
+            {
+                StartWithWindows = true,
+                Paused = false,
+                InstallExecutablePath = currentExecutable
+            };
+            initial.Save();
+            StartupRegistration.ApplyForExecutable(
+                enabled: true,
+                currentExecutable);
             return true;
+        }
 
         var selected = ChooseSettings(
             currentSettingsValid
