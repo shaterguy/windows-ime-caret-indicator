@@ -290,7 +290,6 @@ internal static class LegacyV010Migration
                 displayVersion,
                 LegacyVersion,
                 StringComparison.Ordinal) ||
-            string.IsNullOrWhiteSpace(installLocation) ||
             string.IsNullOrWhiteSpace(uninstallString))
         {
             return false;
@@ -298,7 +297,9 @@ internal static class LegacyV010Migration
 
         try
         {
-            if (!string.Equals(
+            if (!string.IsNullOrWhiteSpace(
+                    installLocation) &&
+                !string.Equals(
                     NormalizeDirectory(installLocation),
                     NormalizeDirectory(
                         LegacyInstallDirectory),
