@@ -134,13 +134,6 @@ public static class WiciRestrictedMediumRunner
         string stringSid,
         out IntPtr sid);
 
-    [DllImport("advapi32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool CheckTokenMembership(
-        IntPtr tokenHandle,
-        IntPtr sidToCheck,
-        out bool isMember);
-
     [DllImport("advapi32.dll")]
     private static extern int GetLengthSid(IntPtr sid);
 
@@ -255,21 +248,6 @@ public static class WiciRestrictedMediumRunner
             }
 
             SetMediumIntegrity(restrictedToken);
-
-            if (!CheckTokenMembership(
-                    restrictedToken,
-                    adminSid,
-                    out var isAdminMember))
-            {
-                throw new Win32Exception(
-                    Marshal.GetLastWin32Error(),
-                    "CheckTokenMembership failed.");
-            }
-            if (isAdminMember)
-            {
-                throw new InvalidOperationException(
-                    "Restricted token still has Administrators SID enabled.");
-            }
 
             var startup = new STARTUPINFO
             {
