@@ -75,7 +75,7 @@ internal static class LegacyV010Migration
     private const string ProductDisplayName =
         "Windows IME Caret Indicator";
     private const string LegacyUninstallDisplayName =
-        "Windows IME Caret Indicator 0.1.0";
+        "Windows IME Caret Indicator version 0.1.0";
     private const string RunKeyPath =
         @"Software\Microsoft\Windows\CurrentVersion\Run";
 
