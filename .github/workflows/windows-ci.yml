@@ -5,6 +5,7 @@ on:
     branches:
       - v0.1.0-dev1
       - work/runtime-validation
+      - release/v0.1.1-turn43-validation
   workflow_dispatch:
 
 permissions:
@@ -16,8 +17,16 @@ jobs:
     timeout-minutes: 35
 
     steps:
-      - name: Checkout
+      - name: Checkout exact approved v0.1.1 candidate
         uses: actions/checkout@v4
+        with:
+          ref: c67977311d0cb3dc4a709b4c59e3a8245ec6c78d
+
+      - name: Checkout release validation harness
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: validation-harness
 
       - name: Use .NET 10
         uses: actions/setup-dotnet@v4
@@ -184,12 +193,107 @@ jobs:
           path: artifacts/cross-integrity.json
           if-no-files-found: error
 
-      - name: Validate v0.1.1 candidate overlay runtime quality
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --version=6.7.1 -y --no-progress
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          ISCC.exe /DMyAppVersion=0.1.1 installer/WindowsImeCaretIndicator.iss
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+      - name: Install v0.1.1 candidate for installed-runtime quality gate
         if: ${{ !startsWith(github.event.head_commit.message, 'security:') }}
         shell: pwsh
         run: |
-          $exe = Resolve-Path "artifacts/win-x64/WindowsImeCaretIndicator.exe"
-          ./tests/runtime-quality-smoke.ps1 -ExecutablePath $exe.Path
+          $installer = Get-ChildItem "artifacts/installer" -Filter "WindowsImeCaretIndicator-Setup-*.exe" | Select-Object -First 1
+          if (-not $installer) {
+            throw "Candidate installer was not produced."
+          }
+          $p = Start-Process -FilePath $installer.FullName -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART" -Wait -PassThru
+          if ($p.ExitCode -ne 0) {
+            throw "Candidate install for runtime-quality gate failed with exit code $($p.ExitCode)."
+          }
+
+      - name: Align runtime-quality harness with v0.1.1 protected-install identities
+        if: ${{ !startsWith(github.event.head_commit.message, 'security:') }}
+        shell: pwsh
+        run: |
+          Copy-Item -LiteralPath "validation-harness/tests/runtime-quality-smoke.ps1" -Destination "tests/runtime-quality-smoke.ps1" -Force
+          $path = "tests/runtime-quality-smoke.ps1"
+          $text = Get-Content -LiteralPath $path -Raw
+          $text = $text.Replace('"WindowsImeCaretIndicator\settings.json"', '"WindowsImeCaretIndicator\state-v2.json"')
+          $text = $text.Replace('-Name "WindowsImeCaretIndicator" -ErrorAction Stop', '-Name "WindowsImeCaretIndicator.ProgramFiles" -ErrorAction Stop')
+          $text = $text.Replace('-Name "WindowsImeCaretIndicator" -Value $originalRunValue', '-Name "WindowsImeCaretIndicator.ProgramFiles" -Value $originalRunValue')
+          $text = $text.Replace('-Name "WindowsImeCaretIndicator" -ErrorAction SilentlyContinue', '-Name "WindowsImeCaretIndicator.ProgramFiles" -ErrorAction SilentlyContinue')
+          $text = $text.Replace('    Write-TestSettings -StartWithWindows $true -Paused $false -Path $settingsPath', '    Write-Host "WICI_RUNTIME_STAGE=bootstrap"; Write-TestSettings -StartWithWindows $true -Paused $false -Path $settingsPath')
+          $text = $text.Replace('    $hostProcess = Start-Process -FilePath $ExecutablePath -ArgumentList "--test-host" -PassThru', '    Write-Host "WICI_RUNTIME_STAGE=start-test-host"; $hostProcess = Start-WiciRestrictedMediumProcess -FilePath $ExecutablePath -ArgumentList @("--test-host") -Role "test-host"')
+          $text = $text.Replace('    $product = Start-Process -FilePath $ExecutablePath -PassThru', '    Write-Host "WICI_RUNTIME_STAGE=start-product"; $product = Start-WiciRestrictedMediumProcess -FilePath $ExecutablePath -Role "product"')
+          $lines = @($text -split '\r?\n')
+          $secondaryIndex = [Array]::IndexOf(
+            $lines,
+            '    $secondary = Start-Process -FilePath $ExecutablePath -PassThru')
+          if ($secondaryIndex -lt 0) {
+            throw "Runtime-quality secondary-launch block was not found."
+          }
+          $expectedSecondary = @(
+            '    $secondary = Start-Process -FilePath $ExecutablePath -PassThru',
+            '    if (-not $secondary.WaitForExit(5000)) {',
+            '        throw "Second normal launch did not exit under the single-instance mutex."',
+            '    }',
+            '    if ($secondary.ExitCode -ne 0) {',
+            '        throw "Second normal launch exited with code $($secondary.ExitCode)."',
+            '    }'
+          )
+          for ($i = 0; $i -lt $expectedSecondary.Count; $i++) {
+            if ($lines[$secondaryIndex + $i] -ne $expectedSecondary[$i]) {
+              throw "Runtime-quality secondary-launch contract drifted at offset $i."
+            }
+          }
+          $replacementSecondary = @(
+            '    Write-Host "WICI_RUNTIME_STAGE=start-secondary"',
+            '    $secondaryResult = Invoke-WiciRestrictedMediumProcess -FilePath $ExecutablePath -Role "secondary" -TimeoutMilliseconds 5000',
+            '    if ($secondaryResult.ExitCode -ne 0) {',
+            '        throw "Second normal launch exited with code $($secondaryResult.ExitCode)."',
+            '    }',
+            '    $secondary = $null'
+          )
+          $beforeSecondary = $lines[0..($secondaryIndex - 1)]
+          $afterSecondary = $lines[($secondaryIndex + $expectedSecondary.Count)..($lines.Count - 1)]
+          $lines = @($beforeSecondary + $replacementSecondary + $afterSecondary)
+          $text = $lines -join [Environment]::NewLine
+          $text = $text.Replace('    $responsiveness = Measure-OverlayResponseLatency -Product $product -Shell $shell -SampleCount 20', '    Write-Host "WICI_RUNTIME_STAGE=latency"; $responsiveness = Measure-OverlayResponseLatency -Product $product -Shell $shell -SampleCount 20')
+          $text = $text.Replace('    $soak = Invoke-CaretSoak -Product $product -Shell $shell -DurationSeconds 180', '    Write-Host "WICI_RUNTIME_STAGE=soak"; $soak = Invoke-CaretSoak -Product $product -Shell $shell -DurationSeconds 180; Write-Host "WICI_RUNTIME_STAGE=soak-done"')
+          $text = $text.Replace('    $trayPause = Invoke-TrayMenuAction -Product $product -Shell $shell -Action "FirstEnabled"', '    Write-Host "WICI_RUNTIME_STAGE=tray-lifecycle"; $trayPause = Invoke-TrayMenuAction -Product $product -Shell $shell -Action "FirstEnabled"')
+          $launcherLine = '. "validation-harness/tests/run-medium-runtime-quality.ps1"'
+          $paramBlock = [regex]::Match($text, '(?ms)\Aparam\(.*?^\)\r?\n')
+          if (-not $paramBlock.Success) {
+            throw "Runtime-quality script parameter block was not found."
+          }
+          $text = $text.Insert($paramBlock.Length, $launcherLine + [Environment]::NewLine)
+          Set-Content -LiteralPath $path -Value $text -Encoding UTF8
+
+      - name: Validate v0.1.1 candidate overlay runtime quality as normal user integrity
+        if: ${{ !startsWith(github.event.head_commit.message, 'security:') }}
+        shell: pwsh
+        run: |
+          $exe = Resolve-Path "${env:ProgramFiles}\Windows IME Caret Indicator\WindowsImeCaretIndicator.exe"
+          $runtimeScript = Resolve-Path "tests/runtime-quality-smoke.ps1"
+          Write-Host "WICI_RUNTIME_STAGE=high-harness-start"
+          & $runtimeScript.Path -ExecutablePath $exe.Path
+
+      - name: Report runtime-quality evidence presence
+        if: ${{ always() && !startsWith(github.event.head_commit.message, 'security:') }}
+        shell: pwsh
+        run: |
+          if (Test-Path "artifacts/runtime-quality.json") {
+            Write-Host "runtime-quality.json was created by the high-context harness."
+          } else {
+            Write-Host "runtime-quality.json was not created before failure."
+          }
 
       - name: Upload released runtime-quality evidence
         if: ${{ !startsWith(github.event.head_commit.message, 'security:') }}
@@ -201,16 +305,17 @@ jobs:
             artifacts/runtime-quality-overlay.png
           if-no-files-found: error
 
-      - name: Install Inno Setup
-        shell: pwsh
-        run: choco install innosetup --version=6.7.1 -y --no-progress
-
-      - name: Build installer
+      - name: Uninstall v0.1.1 runtime-quality candidate
+        if: ${{ always() && !startsWith(github.event.head_commit.message, 'security:') }}
         shell: pwsh
         run: |
-          ISCC.exe /DMyAppVersion=0.1.1 installer/WindowsImeCaretIndicator.iss
-          if ($LASTEXITCODE -ne 0) {
-            exit $LASTEXITCODE
+          $installDir = Join-Path $env:ProgramFiles "Windows IME Caret Indicator"
+          $uninstaller = Get-ChildItem $installDir -Filter "unins*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($uninstaller) {
+            $p = Start-Process -FilePath $uninstaller.FullName -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART" -Wait -PassThru
+            if ($p.ExitCode -ne 0) {
+              throw "Runtime-quality cleanup uninstall failed with exit code $($p.ExitCode)."
+            }
           }
 
       - name: Download immutable v0.1.0 installer
