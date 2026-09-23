@@ -8,8 +8,10 @@
 - Canonical product source: `c67977311d0cb3dc4a709b4c59e3a8245ec6c78d`
 - Validation-harness source: `f7f3788a956e8501790b174f5b685aceca0ae9e6`
 - Distribution validation run: `35745967759`
-- Post-release validation harness commit: `97b36a3bbf8945bbc25216b5be24080e1b3245cc`
-- Post-release validation run: `35801599063` (`success`)
+- Initial post-release validation harness commit: `97b36a3bbf8945bbc25216b5be24080e1b3245cc`
+- Initial post-release validation run: `35801599063` (`success`; target-discovery one-shot WebView2 miss, same-run later high-probe success)
+- Resolving exact-identity validation run: `35802437858` (`success`; head `d4635b4df60bebd952c98654fdc782b6e02422ec`)
+- Transient-retry validation harness commit: `251fbffcdc3de59b6009e7956850c102f28119bb`
 - Release: https://github.com/shaterguy/windows-ime-caret-indicator/releases/tag/v0.1.1
 
 ## Requirement-to-evidence matrix

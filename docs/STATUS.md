@@ -5,14 +5,18 @@
 - 현재 정식 버전: `v0.1.1`
 - canonical product source: `c67977311d0cb3dc4a709b4c59e3a8245ec6c78d`
 - validation-harness source: `f7f3788a956e8501790b174f5b685aceca0ae9e6`
-- post-release validation harness commit: `97b36a3bbf8945bbc25216b5be24080e1b3245cc`
-- post-release validation run: `35801599063` (`success`)
+- initial post-release validation harness commit: `97b36a3bbf8945bbc25216b5be24080e1b3245cc`
+- initial post-release validation run: `35801599063` (`success`; WebView2 target-discovery one-shot miss disclosed below)
+- resolving exact-identity validation run: `35802437858` (`success`; head `d4635b4df60bebd952c98654fdc782b6e02422ec`)
+- transient-retry validation harness commit: `251fbffcdc3de59b6009e7956850c102f28119bb`
 - GitHub Release: https://github.com/shaterguy/windows-ime-caret-indicator/releases/tag/v0.1.1
 - 배포 검증 GitHub Actions run: `35745967759`
 - installer SHA-256: `67c384a9f2da155dc59217acb87e036130d0e842131b0a2519c98b8dc56cb30b`
 - portable SHA-256: `0ed41403a2ad4745a61ed75014502bf38cd2ce5c1dffdb10d7b3cf1a50561f69`
 
 `v0.1.1` 태그와 릴리즈 자산은 위 canonical source에 고정하며 릴리즈 후 문서 정합화 때문에 retarget·replace하지 않습니다.
+
+WebView2 증거는 변동을 숨기지 않고 해석합니다. run `35801599063`은 전체 workflow가 `success`였지만 target-discovery의 첫 단발 UI Automation probe에서 active caret를 놓쳤습니다. 같은 run의 이후 cross-integrity high probe와 후속 exact-identity run `35802437858`에서는 active caret가 다시 확인되어 재현 가능한 제품 결함으로 보지 않습니다. 현재 검증 하니스는 이 transient provider-readiness 변동에 대해 최대 3회·25ms 간격의 bounded re-probe를 사용하며, 기존 단발 miss 자체도 증거에서 제거하지 않습니다.
 
 ## 재사용 가능한 통과 증거
 

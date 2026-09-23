@@ -65,7 +65,7 @@ Windows의 설치된 앱 목록에서 **Windows IME Caret Indicator**를 제거�
 
 ## 검증 현황
 
-`v0.1.1` 배포 파일은 canonical product source `c67977311d0cb3dc4a709b4c59e3a8245ec6c78d`와 validation-harness source `f7f3788a956e8501790b174f5b685aceca0ae9e6`을 기준으로 자동 검증·릴리즈되었습니다. 릴리즈 후 기본 코드선에서는 제품 소스를 계속 `c67977311d0cb3dc4a709b4c59e3a8245ec6c78d`로 고정한 검증 하니스 커밋 `97b36a3bbf8945bbc25216b5be24080e1b3245cc`과 Windows CI run `35801599063`의 성공을 추가 확인했습니다. 대표 검증에는 다음이 포함됩니다.
+`v0.1.1` 배포 파일은 canonical product source `c67977311d0cb3dc4a709b4c59e3a8245ec6c78d`와 validation-harness source `f7f3788a956e8501790b174f5b685aceca0ae9e6`을 기준으로 자동 검증·릴리즈되었습니다. 릴리즈 후 기본 코드선에서도 정식 제품 소스는 계속 `c67977311d0cb3dc4a709b4c59e3a8245ec6c78d`로 고정했습니다. Windows CI run `35801599063`은 전체 run은 `success`였지만 WebView2 target-discovery의 단발 UI Automation probe에서 `activeCaret=false`를 한 차례 관측했고, 같은 run의 이후 cross-integrity high probe에서는 `activeCaret=true`를 다시 확인했습니다. 이어진 exact-identity run `35802437858`(head `d4635b4df60bebd952c98654fdc782b6e02422ec`)에서도 WebView2 active caret가 재확인되었습니다. 이후 validation-harness commit `251fbffcdc3de59b6009e7956850c102f28119bb`은 이 transient provider-readiness 변동을 숨기지 않고 최대 3회·25ms 간격의 bounded re-probe로 다루도록 보강했습니다. 이 후속 검증·하니스 변경은 정식 `v0.1.1` 제품 소스, 태그, 배포 파일을 바꾸지 않습니다. 대표 검증에는 다음이 포함됩니다.
 
 - 메모장, Windows 설정 검색, 파일 탐색기 이름 변경 입력.
 - Chrome/Edge의 input, textarea, contenteditable.
