@@ -10,7 +10,7 @@ Windows의 실제 텍스트 입력 캐럿 옆에 현재 한국어/영어 IME 입
 - 포터블 실행 파일: `WindowsImeCaretIndicator.exe`
 - 릴리즈: https://github.com/shaterguy/windows-ime-caret-indicator/releases/tag/v0.1.1
 
-정식 `v0.1.1` 태그와 배포 파일은 위 소스 커밋에 고정되어 있습니다. 기본 브랜치에는 릴리즈 이후 문서 정합화 커밋만 추가될 수 있으며, 이 경우에도 `v0.1.1` 제품 소스와 배포 파일은 변경되지 않습니다.
+정식 `v0.1.1` 태그와 배포 파일은 위 소스 커밋에 고정되어 있습니다. 기본 브랜치에는 릴리즈 이후 문서 및 검증 하니스 정합화 커밋이 추가될 수 있으며, 이 경우에도 `v0.1.1` 제품 소스와 배포 파일은 변경되지 않습니다.
 
 ## 표시 의미
 
@@ -65,7 +65,7 @@ Windows의 설치된 앱 목록에서 **Windows IME Caret Indicator**를 제거�
 
 ## 검증 현황
 
-`v0.1.1` 배포 파일은 canonical product source `c67977311d0cb3dc4a709b4c59e3a8245ec6c78d`와 validation head `f7f3788a956e8501790b174f5b685aceca0ae9e6`을 기준으로 자동 검증·릴리즈되었습니다. 대표 검증에는 다음이 포함됩니다.
+`v0.1.1` 배포 파일은 canonical product source `c67977311d0cb3dc4a709b4c59e3a8245ec6c78d`와 validation-harness source `f7f3788a956e8501790b174f5b685aceca0ae9e6`을 기준으로 자동 검증·릴리즈되었습니다. 릴리즈 후 기본 코드선에서는 제품 소스를 계속 `c67977311d0cb3dc4a709b4c59e3a8245ec6c78d`로 고정한 검증 하니스 커밋 `97b36a3bbf8945bbc25216b5be24080e1b3245cc`과 Windows CI run `35801599063`의 성공을 추가 확인했습니다. 대표 검증에는 다음이 포함됩니다.
 
 - 메모장, Windows 설정 검색, 파일 탐색기 이름 변경 입력.
 - Chrome/Edge의 input, textarea, contenteditable.

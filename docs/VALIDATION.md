@@ -6,8 +6,10 @@
 
 - Product version: `v0.1.1`
 - Canonical product source: `c67977311d0cb3dc4a709b4c59e3a8245ec6c78d`
-- Validation-only head: `f7f3788a956e8501790b174f5b685aceca0ae9e6`
+- Validation-harness source: `f7f3788a956e8501790b174f5b685aceca0ae9e6`
 - Distribution validation run: `35745967759`
+- Post-release validation harness commit: `97b36a3bbf8945bbc25216b5be24080e1b3245cc`
+- Post-release validation run: `35801599063` (`success`)
 - Release: https://github.com/shaterguy/windows-ime-caret-indicator/releases/tag/v0.1.1
 
 ## Requirement-to-evidence matrix

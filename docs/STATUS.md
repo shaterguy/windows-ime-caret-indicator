@@ -4,7 +4,9 @@
 
 - 현재 정식 버전: `v0.1.1`
 - canonical product source: `c67977311d0cb3dc4a709b4c59e3a8245ec6c78d`
-- validation-only head: `f7f3788a956e8501790b174f5b685aceca0ae9e6`
+- validation-harness source: `f7f3788a956e8501790b174f5b685aceca0ae9e6`
+- post-release validation harness commit: `97b36a3bbf8945bbc25216b5be24080e1b3245cc`
+- post-release validation run: `35801599063` (`success`)
 - GitHub Release: https://github.com/shaterguy/windows-ime-caret-indicator/releases/tag/v0.1.1
 - 배포 검증 GitHub Actions run: `35745967759`
 - installer SHA-256: `67c384a9f2da155dc59217acb87e036130d0e842131b0a2519c98b8dc56cb30b`
@@ -36,4 +38,4 @@
 
 ## 제품 상태와 문서 계보
 
-정식 배포 제품 identity는 계속 `v0.1.1 @ c67977311d0cb3dc4a709b4c59e3a8245ec6c78d`입니다. 기본 브랜치가 이 커밋의 문서 전용 descendant로 이동하더라도 제품 소스·태그·릴리즈 자산 identity는 변경되지 않습니다.
+정식 배포 제품 identity는 계속 `v0.1.1 @ c67977311d0cb3dc4a709b4c59e3a8245ec6c78d`입니다. 기본 브랜치가 이 커밋의 문서 또는 검증 하니스 전용 descendant로 이동하더라도 제품 소스·태그·릴리즈 자산 identity는 변경되지 않습니다.
