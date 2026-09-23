@@ -161,6 +161,45 @@ function Invoke-CaretProbe {
     }
 }
 
+function Invoke-CaretProbeWithTransientRetry {
+    param(
+        [int]$MaxAttempts = 3,
+        [int]$RetryDelayMilliseconds = 25
+    )
+
+    $attempts = @()
+    $last = $null
+    $active = $false
+
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        $last = Invoke-CaretProbe
+        $active = $last.parseable -eq $true -and
+            $last.payload.activeCaret -eq $true
+
+        $attempts += [ordered]@{
+            attempt = $attempt
+            exitCode = $last.exitCode
+            activeCaret = $active
+            probe = $last
+        }
+
+        if ($active -or $attempt -eq $MaxAttempts) {
+            break
+        }
+
+        Start-Sleep -Milliseconds $RetryDelayMilliseconds
+    }
+
+    return [ordered]@{
+        active = $active
+        maxAttempts = $MaxAttempts
+        retryDelayMilliseconds = $RetryDelayMilliseconds
+        attemptCount = $attempts.Count
+        attempts = @($attempts)
+        last = $last
+    }
+}
+
 function Wait-MainWindow {
     param(
         [Parameter(Mandatory = $true)]
@@ -1291,7 +1330,14 @@ function Test-WebView2Host {
         }
 
         $focusDuringEdit = Get-FocusedControlSnapshot
-        $probe = Invoke-CaretProbe
+        $probeSeries = $null
+        if ($editConfirmed) {
+            $probeSeries = Invoke-CaretProbeWithTransientRetry
+            $probe = $probeSeries.last
+        }
+        else {
+            $probe = Invoke-CaretProbe
+        }
 
         if (-not $editConfirmed) {
             return [ordered]@{
@@ -1304,8 +1350,7 @@ function Test-WebView2Host {
             }
         }
 
-        $active = $probe.parseable -eq $true -and
-            $probe.payload.activeCaret -eq $true
+        $active = $probeSeries.active -eq $true
 
         return [ordered]@{
             status = $(if ($active) { "PROBED" } else { "PRODUCT_CARET_GAP" })
@@ -1313,6 +1358,7 @@ function Test-WebView2Host {
             editConfirmed = $true
             focusDuringEdit = $focusDuringEdit
             probe = $probe
+            probeSeries = $probeSeries
         }
     }
     catch {

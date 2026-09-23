@@ -21,7 +21,7 @@
 | ChatGPT 웹 작성창 | PASS | 공개 ChatGPT composer active-caret 진단 |
 | Chrome/Edge | PASS | input, textarea, contenteditable |
 | 메모장/설정 검색/탐색기 이름 변경 | PASS | 실제 Windows 자동 런타임 검증 |
-| Electron/WebView2 | PASS | deterministic Electron/WebView2 test host |
+| Electron/WebView2 | PASS 범위 확보 | Electron은 반복 active-caret 관측. WebView2는 exact `v0.1.1` 제품 소스에서 runs `35745967759`·`35802437858` 및 cross-integrity high probe로 active caret를 직접 관측했습니다. run `35801599063`의 단발 probe false-negative도 보존하며, 검증 하니스는 최대 3회·25ms 간격의 bounded transient re-probe 후에도 실패할 때만 `PRODUCT_CARET_GAP`으로 분류합니다. |
 | 입력 비간섭 | PASS 범위 확보 | click-through, focus/foreground preservation, 메시지 동등성 검증 |
 | 반응성 | PASS 범위 확보 | 일반 조건 overlay response p95 `68.866 ms` |
 | 장시간 안정성 | PASS 범위 확보 | stress/soak 및 단일 overlay 유지 검증 |

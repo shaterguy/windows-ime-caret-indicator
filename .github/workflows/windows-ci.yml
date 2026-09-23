@@ -164,7 +164,7 @@ jobs:
         shell: pwsh
         run: |
           $exe = Resolve-Path "artifacts/win-x64/WindowsImeCaretIndicator.exe"
-          ./tests/windows-target-discovery.ps1 -ExecutablePath $exe.Path
+          ./validation-harness/tests/windows-target-discovery.ps1 -ExecutablePath $exe.Path
 
       - name: Upload Windows target discovery evidence
         if: ${{ always() && !startsWith(github.event.head_commit.message, 'security:') }}
