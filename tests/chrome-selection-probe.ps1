@@ -116,7 +116,13 @@ function Invoke-CaretProbe([string]$Name, [string]$Action) {
         if (-not $started) { throw 'Caret probe failed to start.' }
         $outTask = $probe.StandardOutput.ReadToEndAsync()
         $errTask = $probe.StandardError.ReadToEndAsync()
-        if (-not $probe.WaitForExit($ProbeTimeoutSeconds * 1000)) {
+        # This process owns the temporary focus-loss Form. Pump its UI thread
+        # while the child probes it so UIA requests can be served normally.
+        $probeTimer = [Diagnostics.Stopwatch]::StartNew()
+        while (-not $probe.HasExited -and $probeTimer.Elapsed.TotalSeconds -lt $ProbeTimeoutSeconds) {
+            Wait-Ui 25
+        }
+        if (-not $probe.HasExited) {
             $timedOut = $true
             $probe.Kill($true)
             $null = $probe.WaitForExit(2000)
@@ -164,6 +170,7 @@ function Invoke-CaretProbe([string]$Name, [string]$Action) {
     $results.Add($record)
     $record | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $OutputDirectory "$Name.json") -Encoding utf8
     Write-Host "$Name : $status (exit $exitCode)"
+    Write-Host ($record | ConvertTo-Json -Depth 12 -Compress)
 }
 
 try {

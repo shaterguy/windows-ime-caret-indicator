@@ -368,12 +368,18 @@ jobs:
           if ($process.ExitCode -ne 0 -or -not ((Get-Content $stdout -Raw).Contains('60/60 tests passed.'))) { throw 'Published executable self-test failed.' }
           $hash = (Get-FileHash $exe.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
           @{ source_sha = '${{ github.sha }}'; version = $exe.VersionInfo.ProductVersion; sha256 = $hash; size = $exe.Length } | ConvertTo-Json | Set-Content artifacts/portable/build-identity.json
-      - name: Upload verified portable candidate and evidence
+      - name: Upload verified portable candidate
         uses: actions/upload-artifact@v4
         with:
           name: WICI-v0.1.2-dev2-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/portable/*
+          if-no-files-found: error
+      - name: Upload diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: WICI-dev2-evidence-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            artifacts/portable/*
             artifacts/caret-recovery-red.txt
             artifacts/caret-recovery-green.txt
             artifacts/overlay-snapshots/*
