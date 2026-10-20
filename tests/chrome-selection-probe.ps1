@@ -27,12 +27,16 @@ New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
 $OutputDirectory = (Resolve-Path -LiteralPath $OutputDirectory).Path
 
 Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
 if (-not ('WiciChromeProbe.Foreground' -as [type])) {
     Add-Type @'
 using System;
 using System.Runtime.InteropServices;
 namespace WiciChromeProbe {
+    [StructLayout(LayoutKind.Sequential)]
+    public struct WindowRect { public int Left, Top, Right, Bottom; }
     public static class Foreground {
+        [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr window, out WindowRect rect);
         [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
         [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr window, out uint process);
         public static uint ProcessId() {
@@ -48,7 +52,7 @@ namespace WiciChromeProbe {
 $profile = Join-Path ([IO.Path]::GetTempPath()) ('wici-chrome-probe-' + [guid]::NewGuid().ToString('N'))
 $results = [Collections.Generic.List[object]]::new()
 $shell = New-Object -ComObject WScript.Shell
-$focusForm = $null
+$focusProcess = $null
 $launchProcess = $null
 $runError = $null
 
@@ -92,10 +96,28 @@ function Send-ChromeKeys([string]$Keys) {
         throw 'Chrome lost foreground focus; refusing to send keystrokes to another app.'
     }
     $shell.SendKeys($Keys)
-    Wait-Ui 200
+    Wait-Ui 500
 }
 
 function Invoke-CaretProbe([string]$Name, [string]$Action) {
+    # Capture only the verified synthetic target window, never unrelated desktop.
+    $window = [WiciChromeProbe.Foreground]::GetForegroundWindow()
+    [uint32]$owner = 0
+    $null = [WiciChromeProbe.Foreground]::GetWindowThreadProcessId($window, [ref]$owner)
+    $ownedTarget = $focusProcess -and $owner -eq $focusProcess.Id
+    if (-not $ownedTarget -and -not (@(Get-OwnedChrome | Where-Object { $_.ProcessId -eq $owner }).Count)) {
+        throw 'Screenshot target is not an owned synthetic window.'
+    }
+    $rect = [WiciChromeProbe.WindowRect]::new()
+    if (-not [WiciChromeProbe.Foreground]::GetWindowRect($window, [ref]$rect)) { throw 'Target bounds unavailable.' }
+    $screen = [Drawing.Rectangle]::FromLTRB($rect.Left, $rect.Top, $rect.Right, $rect.Bottom)
+    $screen = [Drawing.Rectangle]::Intersect($screen, [Windows.Forms.SystemInformation]::VirtualScreen)
+    $bitmap = [Drawing.Bitmap]::new($screen.Width, $screen.Height)
+    $graphics = [Drawing.Graphics]::FromImage($bitmap)
+    try {
+        $graphics.CopyFromScreen($screen.Location, [Drawing.Point]::Empty, $screen.Size)
+        $bitmap.Save((Join-Path $OutputDirectory "$Name.png"), [Drawing.Imaging.ImageFormat]::Png)
+    } finally { $graphics.Dispose(); $bitmap.Dispose() }
     $foregroundId = [WiciChromeProbe.Foreground]::ProcessId()
     $start = [Diagnostics.ProcessStartInfo]::new()
     $start.FileName = $ExecutablePath
@@ -198,19 +220,21 @@ try {
     Invoke-CaretProbe 'empty-omnibox' 'Backspace clears the selected synthetic text.'
 
     Send-ChromeKeys 'wici-caret-probe.invalid'
-    $focusForm = [Windows.Forms.Form]::new()
-    $focusForm.Text = 'WICI temporary non-text focus target'
-    $focusForm.StartPosition = [Windows.Forms.FormStartPosition]::CenterScreen
-    $button = [Windows.Forms.Button]::new()
-    $button.Text = 'Non-text focus target'
-    $button.Dock = [Windows.Forms.DockStyle]::Fill
-    $focusForm.Controls.Add($button)
-    $focusForm.Show()
-    $focusForm.Activate()
-    $null = $button.Focus()
-    Wait-Ui 300
-    if ([WiciChromeProbe.Foreground]::GetForegroundWindow() -ne $focusForm.Handle -or -not $button.Focused) {
-        throw 'Temporary non-text button did not acquire focus.'
+    $targetScript = Join-Path $PSScriptRoot 'focus-loss-host.ps1'
+    $focusProcess = Start-Process -FilePath (Join-Path $PSHOME 'pwsh.exe') -ArgumentList @(
+        '-NoLogo', '-NoProfile', '-Sta', '-File', "`"$targetScript`"") -WindowStyle Hidden -PassThru
+    $targetTimer = [Diagnostics.Stopwatch]::StartNew()
+    while ($targetTimer.Elapsed.TotalSeconds -lt 10) {
+        $focusProcess.Refresh()
+        if ($focusProcess.HasExited) { throw 'Standalone focus target exited unexpectedly.' }
+        if ($focusProcess.MainWindowHandle -ne 0 -and $shell.AppActivate($focusProcess.Id)) {
+            Wait-Ui 300
+            if ([WiciChromeProbe.Foreground]::ProcessId() -eq $focusProcess.Id) { break }
+        }
+        Wait-Ui 100
+    }
+    if ([WiciChromeProbe.Foreground]::ProcessId() -ne $focusProcess.Id) {
+        throw 'Standalone non-text target did not acquire focus.'
     }
     Invoke-CaretProbe 'focus-loss-button' 'Chrome loses focus to a temporary WinForms button, not another text field.'
 }
@@ -218,7 +242,12 @@ catch {
     $runError = $_.Exception.Message
 }
 finally {
-    if ($focusForm) { $focusForm.Close(); $focusForm.Dispose() }
+    if ($focusProcess) {
+        try {
+            if (-not $focusProcess.HasExited) { $focusProcess.Kill($true); $null = $focusProcess.WaitForExit(3000) }
+        } catch { Write-Warning "Could not stop owned focus target: $($_.Exception.Message)" }
+        finally { $focusProcess.Dispose() }
+    }
     # Kill only the unique profile's browser root and its own descendants.
     $ownedProcesses = @()
     try { $ownedProcesses = @(Get-OwnedChrome) }
