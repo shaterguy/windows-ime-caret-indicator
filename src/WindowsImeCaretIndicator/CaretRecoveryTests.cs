@@ -94,7 +94,7 @@ internal static class CaretRecoveryTests
             if (!_first) return null!;
             _first = false;
             // Use FlaUI's actual HRESULT conversion, not a synthetic replacement type.
-            return Com.Call<AutomationElement>(() =>
+            return FlaUI.Core.Tools.Com.Call<AutomationElement>(() =>
                 throw new COMException("Test element disappeared", unchecked((int)0x80040201)));
         }
     }
