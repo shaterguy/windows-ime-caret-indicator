@@ -50,8 +50,8 @@ internal static class OverlayMetrics
     internal static Size CalculateSize(Rectangle caret, uint dpi)
     {
         var scale = Math.Max(1.0, dpi / 96.0);
-        var min = 18.0 * scale;
-        var max = 24.0 * scale;
+        var min = 14.0 * scale;
+        var max = 18.0 * scale;
         var desired = Math.Max(1, caret.Height) * 0.65;
         var side = (int)Math.Round(Math.Clamp(desired, min, max));
         return new Size(side, side);
