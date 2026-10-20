@@ -35,6 +35,11 @@ internal sealed class UiaCaretProvider : ICaretProvider, IDisposable
                 return false;
             }
 
+            if (!FocusedInputGuard.TryCapture(out var inputFocus) ||
+                !FocusedInputGuard.BelongsToForeground(focused, inputFocus))
+                return false;
+
+            var writableEdit = FocusedInputGuard.IsWritableEdit(focused);
             if (!focused.Patterns.Text.TryGetPattern(out var textPattern) ||
                 textPattern is null)
             {
@@ -46,15 +51,27 @@ internal sealed class UiaCaretProvider : ICaretProvider, IDisposable
                 return false;
 
             var range = ranges[0];
+            var readOnly = range.GetAttributeValue(_automation.TextAttributeLibrary.IsReadOnly);
+            if (!FocusedInputGuard.AllowsRange(readOnly, writableEdit))
+                return false;
             var isDegenerate = range.CompareEndpoints(
                 TextPatternRangeEndpoint.Start,
                 range,
                 TextPatternRangeEndpoint.End) == 0;
 
-            if (!isDegenerate)
+            // A text block has its own actual geometry; anchor its lower-right
+            // edge rather than guessing the active end of a reversed selection.
+            var selectedEdit = !isDegenerate && writableEdit;
+            if (!isDegenerate && !selectedEdit)
                 return false;
 
-            if (!TryGetCaretRectangle(range, out var caret))
+            var caret = Rectangle.Empty;
+            var usedMsaa = isDegenerate && writableEdit &&
+                MsaaCaretGeometry.TryGet(inputFocus, out caret);
+            if (isDegenerate && !usedMsaa &&
+                !FocusedInputGuard.AllowsCollapsedUia(focused.Properties.FrameworkId.ValueOrDefault))
+                return false;
+            if (!usedMsaa && !TryGetSelectionRectangle(range, selectedEdit, out caret))
                 return false;
 
             var hwnd = focused.Properties.NativeWindowHandle.ValueOrDefault;
@@ -73,11 +90,16 @@ internal sealed class UiaCaretProvider : ICaretProvider, IDisposable
                 hwnd = focusHwnd;
             }
 
+            if (!FocusedInputGuard.BelongsToForeground(focused, inputFocus))
+                return false;
+
             state = new CaretState(
                 caret,
                 hwnd,
                 threadId,
-                "UIA.TextPattern.Selection");
+                usedMsaa ? "MSAA.OBJID_CARET.FocusedEdit" :
+                selectedEdit ? "UIA.TextPattern.SelectionBlockEdge" : "UIA.TextPattern.Selection",
+                () => FocusedInputGuard.BelongsToForeground(focused, inputFocus));
 
             return true;
         }
@@ -97,6 +119,22 @@ internal sealed class UiaCaretProvider : ICaretProvider, IDisposable
         {
             return false;
         }
+    }
+
+    internal static bool TryGetSelectionRectangle(
+        ITextRange range, bool selectedEdit, out Rectangle caret)
+    {
+        if (!selectedEdit)
+            return TryGetCaretRectangle(range, out caret);
+
+        // Use actual selected text, never an invented edit-field origin.
+        if (TryLastRectangle(range, out var rect))
+        {
+            caret = ToCaretEdge(rect, useLeftEdge: false);
+            return true;
+        }
+        caret = Rectangle.Empty;
+        return false;
     }
 
     private static bool TryGetCaretRectangle(
@@ -259,7 +297,9 @@ internal sealed class Win32CaretProvider : ICaretProvider
 
         if (!Native.GetGUIThreadInfo(threadId, ref info) ||
             info.hwndFocus == nint.Zero ||
-            info.hwndCaret == nint.Zero)
+            info.hwndCaret == nint.Zero ||
+            info.hwndCaret != info.hwndFocus ||
+            info.rcCaret.Bottom <= info.rcCaret.Top)
         {
             return false;
         }
@@ -284,11 +324,15 @@ internal sealed class Win32CaretProvider : ICaretProvider
             Math.Max(1, bottomRight.X - topLeft.X),
             Math.Max(1, bottomRight.Y - topLeft.Y));
 
+        if (!FocusedInputGuard.IsCurrent(new InputFocusSnapshot(foreground, info.hwndFocus, threadId)))
+            return false;
+
         state = new CaretState(
             caret,
             info.hwndFocus,
             threadId,
-            "Win32.GetGUIThreadInfo");
+            "Win32.GetGUIThreadInfo",
+            () => FocusedInputGuard.IsCurrent(new InputFocusSnapshot(foreground, info.hwndFocus, threadId)));
 
         return true;
     }

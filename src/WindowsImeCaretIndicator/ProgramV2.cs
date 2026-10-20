@@ -16,6 +16,12 @@ internal static class ProgramV2
 
         _ = Native.SetProcessDpiAwarenessContext(new nint(-4));
 
+        if (args.Length == 2 && args[0] == "--render-overlay-snapshots")
+        {
+            OverlayPresentationTests.WriteSnapshots(args[1]);
+            return 0;
+        }
+
         if (args.Contains(
                 "--self-test",
                 StringComparer.OrdinalIgnoreCase))

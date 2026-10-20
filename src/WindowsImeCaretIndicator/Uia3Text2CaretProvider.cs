@@ -30,6 +30,10 @@ internal sealed class Uia3Text2CaretProvider : ICaretProvider, IDisposable
                 return false;
             }
 
+            if (!FocusedInputGuard.TryCapture(out var inputFocus) ||
+                !FocusedInputGuard.BelongsToForeground(focused, inputFocus))
+                return false;
+
             if (!focused.Patterns.Text2.TryGetPattern(out var text2) ||
                 text2 is null)
             {
@@ -39,7 +43,15 @@ internal sealed class Uia3Text2CaretProvider : ICaretProvider, IDisposable
             var range = text2.GetCaretRange(out var isActive);
             if (!isActive || range is null)
                 return false;
+            if (!FocusedInputGuard.AllowsRange(
+                range.GetAttributeValue(_automation.TextAttributeLibrary.IsReadOnly),
+                FocusedInputGuard.IsWritableEdit(focused)))
+                return false;
 
+            // Chromium collapsed ranges may be synthesized from field bounds.
+            // Its real system caret is handled by the following provider.
+            if (!FocusedInputGuard.AllowsCollapsedUia(focused.Properties.FrameworkId.ValueOrDefault))
+                return false;
             if (!TryGetCaretRectangle(range, out var caret))
                 return false;
 
@@ -59,11 +71,15 @@ internal sealed class Uia3Text2CaretProvider : ICaretProvider, IDisposable
                 hwnd = focusHwnd;
             }
 
+            if (!FocusedInputGuard.BelongsToForeground(focused, inputFocus))
+                return false;
+
             state = new CaretState(
                 caret,
                 hwnd,
                 threadId,
-                "UIA3.TextPattern2.GetCaretRange");
+                "UIA3.TextPattern2.GetCaretRange",
+                () => FocusedInputGuard.BelongsToForeground(focused, inputFocus));
 
             return true;
         }

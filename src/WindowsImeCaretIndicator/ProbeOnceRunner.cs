@@ -76,6 +76,8 @@ internal static class ProbeOnceRunner
             }
 
             var ime = imeReader.Read(caret);
+            if (!FocusedInputGuard.CanPresent(caret))
+                return Emit(new { activeCaret = false, process, at = DateTimeOffset.UtcNow }, 3);
             return Emit(
                 new
                 {

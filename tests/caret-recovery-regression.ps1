@@ -13,7 +13,14 @@ foreach ($file in @('Uia3Text2CaretProvider.cs', 'CaretTracking.cs')) {
     if (([regex]::Matches($content, [regex]::Escape($catch)).Count) -ne 1) { throw "Expected one recovery catch in $file" }
     [IO.File]::WriteAllText($path, $content.Replace($catch, ''))
 }
-# The red fixture differs only by the two exact catch clauses being absent.
+# Regression counterexamples restore the former selection rejection and labels.
+$selectionPath = Join-Path $redRoot 'WindowsImeCaretIndicator/CaretTracking.cs'
+$content = [IO.File]::ReadAllText($selectionPath)
+$content = $content.Replace('if (TryLastRectangle(range, out var rect))', 'if (false && TryLastRectangle(range, out var rect))')
+[IO.File]::WriteAllText($selectionPath, $content)
+$overlayPath = Join-Path $redRoot 'WindowsImeCaretIndicator/IndicatorOverlayForm.cs'
+$content = [IO.File]::ReadAllText($overlayPath).Replace('ImeMode.Korean => "ㅎ"', 'ImeMode.Korean => "한"').Replace('ImeMode.English => "A"', 'ImeMode.English => "영"')
+[IO.File]::WriteAllText($overlayPath, $content)
 & dotnet build $redProject -c Debug -o artifacts/caret-recovery-red
 if ($LASTEXITCODE -ne 0) { throw 'Red fixture did not compile.' }
 $redOutput = & './artifacts/caret-recovery-red/WindowsImeCaretIndicator.exe' --self-test 2>&1
@@ -33,13 +40,14 @@ foreach ($name in $expected) {
         throw "Red failure did not match the reported exception: $name"
     }
 }
-if ([regex]::Matches($text, '(?m)^FAIL(?:[: ])').Count -ne 4) { throw 'Unexpected red fixture failures.' }
+foreach ($name in @('selected edit anchors actual block without altering selection', 'selection anchor uses selected range only as fallback', 'Korean overlay is the single consonant ㅎ', 'English overlay is uppercase A')) { if (-not $text.Contains("FAIL: ${name}:")) { throw "Missing red counterexample: $name" } }
+if ([regex]::Matches($text, '(?m)^FAIL(?:[: ])').Count -ne 8) { throw 'Unexpected red fixture failures.' }
 & dotnet build $project -c Debug -o artifacts/caret-recovery-green
 if ($LASTEXITCODE -ne 0) { throw 'Fixed candidate did not compile.' }
 $greenOutput = & './artifacts/caret-recovery-green/WindowsImeCaretIndicator.exe' --self-test 2>&1
 $greenExit = $LASTEXITCODE
 $greenOutput | Set-Content artifacts/caret-recovery-green.txt
 $greenOutput | Write-Host
-if ($greenExit -ne 0 -or -not (($greenOutput -join "`n").Contains('37/37 tests passed.'))) {
+if ($greenExit -ne 0 -or -not (($greenOutput -join "`n").Contains('60/60 tests passed.'))) {
     throw "Fixed candidate regression failed, exit $greenExit"
 }

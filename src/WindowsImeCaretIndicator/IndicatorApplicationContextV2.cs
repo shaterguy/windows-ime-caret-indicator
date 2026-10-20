@@ -217,6 +217,11 @@ internal sealed class IndicatorApplicationContextV2 : ApplicationContext
             gapX,
             gapY);
 
+        if (bounds.IsEmpty || !FocusedInputGuard.CanPresent(caret))
+        {
+            _overlay.Dismiss();
+            return;
+        }
         _overlay.Present(bounds, ime.Mode);
     }
 

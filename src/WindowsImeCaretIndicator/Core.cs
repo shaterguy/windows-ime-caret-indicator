@@ -20,7 +20,8 @@ internal sealed record CaretState(
     Rectangle Caret,
     nint FocusWindow,
     uint FocusThreadId,
-    string Source);
+    string Source,
+    Func<bool>? IsCurrent = null);
 
 internal static class ImeLogic
 {
@@ -49,8 +50,8 @@ internal static class OverlayMetrics
     internal static Size CalculateSize(Rectangle caret, uint dpi)
     {
         var scale = Math.Max(1.0, dpi / 96.0);
-        var min = 12.0 * scale;
-        var max = 20.0 * scale;
+        var min = 18.0 * scale;
+        var max = 24.0 * scale;
         var desired = Math.Max(1, caret.Height) * 0.65;
         var side = (int)Math.Round(Math.Clamp(desired, min, max));
         return new Size(side, side);
@@ -67,26 +68,9 @@ internal static class OverlayPlacement
 {
     internal static Rectangle Choose(Rectangle caret, Size overlay, Rectangle workArea, int gapX, int gapY)
     {
-        var points = new[]
-        {
-            new Point(caret.Right + gapX, caret.Bottom + gapY),
-            new Point(caret.Left - overlay.Width - gapX, caret.Bottom + gapY),
-            new Point(caret.Right + gapX, caret.Top - overlay.Height - gapY),
-            new Point(caret.Left - overlay.Width - gapX, caret.Top - overlay.Height - gapY)
-        };
-
-        foreach (var point in points)
-        {
-            var candidate = new Rectangle(point, overlay);
-            if (workArea.Contains(candidate))
-                return candidate;
-        }
-
-        return new Rectangle(
-            Math.Clamp(caret.Right + gapX, workArea.Left, Math.Max(workArea.Left, workArea.Right - overlay.Width)),
-            Math.Clamp(caret.Bottom + gapY, workArea.Top, Math.Max(workArea.Top, workArea.Bottom - overlay.Height)),
-            overlay.Width,
-            overlay.Height);
+        var candidate = new Rectangle(caret.Right + gapX, caret.Bottom + gapY,
+            overlay.Width, overlay.Height);
+        return workArea.Contains(candidate) ? candidate : Rectangle.Empty;
     }
 }
 
@@ -118,9 +102,9 @@ internal static class SelfTests
                     2)),
             errors);
 
-        Check("right-edge flips left", () =>
+        Check("right-edge hides instead of relocating", () =>
             Equal(
-                new Rectangle(1895, 122, 16, 16),
+                Rectangle.Empty,
                 OverlayPlacement.Choose(
                     new Rectangle(1915, 100, 1, 20),
                     new Size(16, 16),
@@ -162,9 +146,9 @@ internal static class SelfTests
                     2)),
             errors);
 
-        Check("top-right corner flips lower-left", () =>
+        Check("top-right corner hides instead of relocating", () =>
             Equal(
-                new Rectangle(1895, 22, 16, 16),
+                Rectangle.Empty,
                 OverlayPlacement.Choose(
                     new Rectangle(1915, 0, 1, 20),
                     new Size(16, 16),
@@ -177,7 +161,7 @@ internal static class SelfTests
         {
             var workArea = new Rectangle(-1920, 0, 1920, 1080);
             var result = OverlayPlacement.Choose(
-                new Rectangle(-20, 1000, 1, 20),
+                new Rectangle(-40, 1000, 1, 20),
                 new Size(16, 16),
                 workArea,
                 4,
@@ -187,20 +171,20 @@ internal static class SelfTests
         }, errors);
 
         Check("100 percent DPI size follows caret height", () =>
-            Equal(new Size(13, 13), OverlayMetrics.CalculateSize(new Rectangle(0, 0, 1, 20), 96)), errors);
+            Equal(new Size(18, 18), OverlayMetrics.CalculateSize(new Rectangle(0, 0, 1, 20), 96)), errors);
 
         Check("125 percent DPI minimum scales", () =>
-            Equal(new Size(15, 15), OverlayMetrics.CalculateSize(new Rectangle(0, 0, 1, 20), 120)), errors);
+            Equal(new Size(22, 22), OverlayMetrics.CalculateSize(new Rectangle(0, 0, 1, 20), 120)), errors);
 
         Check("150 percent DPI minimum scales", () =>
-            Equal(new Size(18, 18), OverlayMetrics.CalculateSize(new Rectangle(0, 0, 1, 20), 144)), errors);
+            Equal(new Size(27, 27), OverlayMetrics.CalculateSize(new Rectangle(0, 0, 1, 20), 144)), errors);
 
         Check("200 percent DPI minimum scales", () =>
-            Equal(new Size(24, 24), OverlayMetrics.CalculateSize(new Rectangle(0, 0, 1, 20), 192)), errors);
+            Equal(new Size(36, 36), OverlayMetrics.CalculateSize(new Rectangle(0, 0, 1, 20), 192)), errors);
 
-        Check("bottom edge flips above", () =>
+        Check("bottom edge hides instead of relocating", () =>
             Equal(
-                new Rectangle(105, 1042, 16, 16),
+                Rectangle.Empty,
                 OverlayPlacement.Choose(
                     new Rectangle(100, 1060, 1, 20),
                     new Size(16, 16),
@@ -209,9 +193,9 @@ internal static class SelfTests
                     2)),
             errors);
 
-        Check("bottom-right corner flips upper-left", () =>
+        Check("bottom-right corner hides instead of relocating", () =>
             Equal(
-                new Rectangle(1895, 1042, 16, 16),
+                Rectangle.Empty,
                 OverlayPlacement.Choose(
                     new Rectangle(1915, 1060, 1, 20),
                     new Size(16, 16),
@@ -220,9 +204,9 @@ internal static class SelfTests
                     2)),
             errors);
 
-        Check("bottom-left corner flips upper-right", () =>
+        Check("bottom-left corner hides instead of relocating", () =>
             Equal(
-                new Rectangle(5, 1042, 16, 16),
+                Rectangle.Empty,
                 OverlayPlacement.Choose(
                     new Rectangle(0, 1060, 1, 20),
                     new Size(16, 16),
@@ -388,7 +372,7 @@ internal static class SelfTests
                     "second thread acquired the owned mutex");
         }, errors);
 
-        var recoveryTests = CaretRecoveryTests.Run(errors);
+        var recoveryTests = CaretRecoveryTests.Run(errors) + OverlayPresentationTests.Run(errors) + SelectionDisplayTests.Run(errors);
 
         foreach (var error in errors)
             Console.Error.WriteLine(error);
