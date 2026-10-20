@@ -35,7 +35,22 @@ using System.Runtime.InteropServices;
 namespace WiciChromeProbe {
     [StructLayout(LayoutKind.Sequential)]
     public struct WindowRect { public int Left, Top, Right, Bottom; }
+    [StructLayout(LayoutKind.Sequential)]
+    public struct KeyInput { public ushort Vk, Scan; public uint Flags, Time; public IntPtr Extra; }
+    [StructLayout(LayoutKind.Explicit, Size=40)]
+    public struct Input { [FieldOffset(0)] public uint Type; [FieldOffset(8)] public KeyInput Key; }
     public static class Foreground {
+        [DllImport("user32.dll", SetLastError=true)] private static extern uint SendInput(uint count, Input[] input, int size);
+        private static Input Key(ushort key, bool up) => new Input { Type=1, Key=new KeyInput { Vk=key, Flags=up ? 2u : 0u } };
+        public static void Press(ushort key, bool control) {
+            Input[] inputs = control ? new[] { Key(0x11,false), Key(key,false), Key(key,true), Key(0x11,true) }
+                                     : new[] { Key(key,false), Key(key,true) };
+            if (SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<Input>()) != inputs.Length) {
+                var release = new[] { Key(0x11,true), Key(key,true) };
+                SendInput((uint)release.Length, release, Marshal.SizeOf<Input>());
+                throw new InvalidOperationException("Native synthetic keyboard input was incomplete.");
+            }
+        }
         [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr window, out WindowRect rect);
         [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
         [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr window, out uint process);
@@ -96,6 +111,15 @@ function Send-ChromeKeys([string]$Keys) {
         throw 'Chrome lost foreground focus; refusing to send keystrokes to another app.'
     }
     $shell.SendKeys($Keys)
+    Wait-Ui 500
+}
+
+function Send-ChromeKey([uint16]$Key, [bool]$Control = $false) {
+    $foregroundId = [WiciChromeProbe.Foreground]::ProcessId()
+    if (-not (@(Get-OwnedChrome | Where-Object { $_.ProcessId -eq $foregroundId }).Count)) {
+        throw 'Chrome lost foreground focus; refusing native keys.'
+    }
+    [WiciChromeProbe.Foreground]::Press($Key, $Control)
     Wait-Ui 500
 }
 
@@ -206,17 +230,17 @@ try {
     }
     $launchProcess = [Diagnostics.Process]::Start($chromeStart)
     Focus-OwnedChrome
-    Send-ChromeKeys '^l'
+    Send-ChromeKey 0x4C $true
     Send-ChromeKeys 'wici-caret-probe.invalid'
     Invoke-CaretProbe 'ordinary-omnibox-caret' 'Ctrl+L, then synthetic text without Enter.'
 
-    Send-ChromeKeys '{LEFT}'
+    Send-ChromeKey 0x25
     Invoke-CaretProbe 'left-move-without-typing' 'One Left arrow after the ordinary caret case; text unchanged.'
 
-    Send-ChromeKeys '^a'
+    Send-ChromeKey 0x41 $true
     Invoke-CaretProbe 'omnibox-selection' 'Ctrl+A selects all synthetic omnibox text.'
 
-    Send-ChromeKeys '{BACKSPACE}'
+    Send-ChromeKey 0x08
     Invoke-CaretProbe 'empty-omnibox' 'Backspace clears the selected synthetic text.'
 
     Send-ChromeKeys 'wici-caret-probe.invalid'
@@ -281,4 +305,19 @@ if ($runError) { throw $runError }
 if (@($results | Where-Object { $_.status -notin @('caret', 'no-caret') }).Count) {
     throw "Probe execution errors were recorded. See '$OutputDirectory/summary.json'."
 }
-Write-Host "Chrome selection diagnostic complete. 'no-caret' is an observation, not a failure. Results: $OutputDirectory"
+$byCase = @{}
+foreach ($result in $results) { $byCase[$result.case] = $result }
+foreach ($name in @('ordinary-omnibox-caret', 'left-move-without-typing', 'omnibox-selection', 'empty-omnibox')) {
+    if ($byCase[$name].status -ne 'caret') { throw "Required real caret/selection was not found: $name" }
+}
+if ($byCase['focus-loss-button'].status -ne 'no-caret') { throw 'Non-text focus retained an unwanted caret.' }
+if ($byCase['omnibox-selection'].probe.caret.source -ne 'UIA.TextPattern.SelectionBlockEdge') {
+    throw 'Selection case did not expose a real noncollapsed text range.'
+}
+if ($byCase['left-move-without-typing'].probe.caret.x -ge $byCase['ordinary-omnibox-caret'].probe.caret.x) {
+    throw 'Left arrow did not move the actual caret left.'
+}
+if ($byCase['empty-omnibox'].probe.caret.x -ge $byCase['ordinary-omnibox-caret'].probe.caret.x) {
+    throw 'Cleared omnibox did not expose an earlier empty-field caret.'
+}
+Write-Host "Chrome caret/selection state gates passed; screenshots still require inspection. Results: $OutputDirectory"
