@@ -23,6 +23,13 @@ internal static class OverlayPresentationTests
 
         foreach (var dpi in new uint[] { 96, 120, 144, 192 })
         {
+            Check($"compact overlay maximum scales at {dpi} DPI", () =>
+            {
+                var expected = (int)Math.Round(18.0 * dpi / 96.0);
+                var actual = OverlayMetrics.CalculateSize(new Rectangle(0, 0, 1, 1000), dpi);
+                Require(actual == new Size(expected, expected));
+            });
+
             Check($"bold overlay glyphs fit at {dpi} DPI", () =>
             {
                 // Exercise both ends of the allowed size range, not only the

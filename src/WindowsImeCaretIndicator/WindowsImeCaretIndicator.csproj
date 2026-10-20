@@ -14,7 +14,7 @@
     <AssemblyName>WindowsImeCaretIndicator</AssemblyName>
     <RootNamespace>WindowsImeCaretIndicator</RootNamespace>
     <VersionPrefix>0.1.2</VersionPrefix>
-    <VersionSuffix>dev2</VersionSuffix>
+    <VersionSuffix>dev3</VersionSuffix>
   </PropertyGroup>
 
   <ItemGroup>

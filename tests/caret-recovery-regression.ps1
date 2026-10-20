@@ -21,6 +21,10 @@ $content = $content.Replace('if (TryLastRectangle(range, out var rect))', 'if (f
 $overlayPath = Join-Path $redRoot 'WindowsImeCaretIndicator/IndicatorOverlayForm.cs'
 $content = [IO.File]::ReadAllText($overlayPath).Replace('ImeMode.Korean => "ㅎ"', 'ImeMode.Korean => "한"').Replace('ImeMode.English => "A"', 'ImeMode.English => "영"')
 [IO.File]::WriteAllText($overlayPath, $content)
+# Restore the former oversized metric limits in the isolated counterexample.
+$metricsPath = Join-Path $redRoot 'WindowsImeCaretIndicator/Core.cs'
+$content = [IO.File]::ReadAllText($metricsPath).Replace('var min = 14.0 * scale;', 'var min = 18.0 * scale;').Replace('var max = 18.0 * scale;', 'var max = 24.0 * scale;')
+[IO.File]::WriteAllText($metricsPath, $content)
 & dotnet build $redProject -c Debug -o artifacts/caret-recovery-red
 if ($LASTEXITCODE -ne 0) { throw 'Red fixture did not compile.' }
 $redOutput = & './artifacts/caret-recovery-red/WindowsImeCaretIndicator.exe' --self-test 2>&1
@@ -41,13 +45,13 @@ foreach ($name in $expected) {
     }
 }
 foreach ($name in @('selected edit anchors actual block without altering selection', 'selection anchor uses selected range only as fallback', 'Korean overlay is the single consonant ㅎ', 'English overlay is uppercase A')) { if (-not $text.Contains("FAIL: ${name}:")) { throw "Missing red counterexample: $name" } }
-if ([regex]::Matches($text, '(?m)^FAIL(?:[: ])').Count -ne 8) { throw 'Unexpected red fixture failures.' }
+if ([regex]::Matches($text, '(?m)^FAIL(?:[: ])').Count -ne 16) { throw 'Unexpected red fixture failures.' }
 & dotnet build $project -c Debug -o artifacts/caret-recovery-green
 if ($LASTEXITCODE -ne 0) { throw 'Fixed candidate did not compile.' }
 $greenOutput = & './artifacts/caret-recovery-green/WindowsImeCaretIndicator.exe' --self-test 2>&1
 $greenExit = $LASTEXITCODE
 $greenOutput | Set-Content artifacts/caret-recovery-green.txt
 $greenOutput | Write-Host
-if ($greenExit -ne 0 -or -not (($greenOutput -join "`n").Contains('60/60 tests passed.'))) {
+if ($greenExit -ne 0 -or -not (($greenOutput -join "`n").Contains('64/64 tests passed.'))) {
     throw "Fixed candidate regression failed, exit $greenExit"
 }

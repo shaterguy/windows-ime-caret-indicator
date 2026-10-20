@@ -171,16 +171,16 @@ internal static class SelfTests
         }, errors);
 
         Check("100 percent DPI size follows caret height", () =>
-            Equal(new Size(18, 18), OverlayMetrics.CalculateSize(new Rectangle(0, 0, 1, 20), 96)), errors);
+            Equal(new Size(14, 14), OverlayMetrics.CalculateSize(new Rectangle(0, 0, 1, 20), 96)), errors);
 
         Check("125 percent DPI minimum scales", () =>
-            Equal(new Size(22, 22), OverlayMetrics.CalculateSize(new Rectangle(0, 0, 1, 20), 120)), errors);
+            Equal(new Size(18, 18), OverlayMetrics.CalculateSize(new Rectangle(0, 0, 1, 20), 120)), errors);
 
         Check("150 percent DPI minimum scales", () =>
-            Equal(new Size(27, 27), OverlayMetrics.CalculateSize(new Rectangle(0, 0, 1, 20), 144)), errors);
+            Equal(new Size(21, 21), OverlayMetrics.CalculateSize(new Rectangle(0, 0, 1, 20), 144)), errors);
 
         Check("200 percent DPI minimum scales", () =>
-            Equal(new Size(36, 36), OverlayMetrics.CalculateSize(new Rectangle(0, 0, 1, 20), 192)), errors);
+            Equal(new Size(28, 28), OverlayMetrics.CalculateSize(new Rectangle(0, 0, 1, 20), 192)), errors);
 
         Check("bottom edge hides instead of relocating", () =>
             Equal(
