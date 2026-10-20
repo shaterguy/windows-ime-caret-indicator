@@ -2,9 +2,19 @@ namespace WindowsImeCaretIndicator;
 
 internal sealed class TextPattern2Bridge : IDisposable
 {
-    private readonly Uia3Text2CaretProvider _primary = new();
-    private readonly UiaCaretProvider _selectionFallback = new();
-    private readonly Win32CaretProvider _fallback = new();
+    private readonly ICaretProvider _primary;
+    private readonly ICaretProvider _selectionFallback;
+    private readonly ICaretProvider _fallback;
+
+    internal TextPattern2Bridge(
+        ICaretProvider? primary = null,
+        ICaretProvider? selectionFallback = null,
+        ICaretProvider? fallback = null)
+    {
+        _primary = primary ?? new Uia3Text2CaretProvider();
+        _selectionFallback = selectionFallback ?? new UiaCaretProvider();
+        _fallback = fallback ?? new Win32CaretProvider();
+    }
 
     internal bool TryGetActiveCaret(out CaretState? state)
     {
@@ -19,7 +29,7 @@ internal sealed class TextPattern2Bridge : IDisposable
 
     public void Dispose()
     {
-        _selectionFallback.Dispose();
-        _primary.Dispose();
+        (_selectionFallback as IDisposable)?.Dispose();
+        (_primary as IDisposable)?.Dispose();
     }
 }

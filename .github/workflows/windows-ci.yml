@@ -12,6 +12,7 @@ permissions:
 
 jobs:
   build-test:
+    if: github.ref != 'refs/heads/work/ime-exception-v0.1.2-dev1'
     runs-on: windows-latest
     timeout-minutes: 35
 
@@ -332,3 +333,41 @@ jobs:
         shell: pwsh
         run: |
           throw "One or more runtime smoke tests failed earlier in this job."
+
+  caret-recovery:
+    if: github.ref == 'refs/heads/work/ime-exception-v0.1.2-dev1'
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Verify exact exception red-to-green and existing self tests
+        shell: pwsh
+        run: ./tests/caret-recovery-regression.ps1
+      - name: Publish the verified portable candidate
+        shell: pwsh
+        run: |
+          dotnet publish src/WindowsImeCaretIndicator/WindowsImeCaretIndicator.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o artifacts/portable
+          if ($LASTEXITCODE -ne 0) { throw 'Portable publish failed.' }
+          $exe = Get-Item artifacts/portable/WindowsImeCaretIndicator.exe
+          if ($exe.VersionInfo.FileVersion -ne '0.1.2.0') { throw 'Unexpected file version.' }
+          if ($exe.VersionInfo.ProductVersion -notlike '0.1.2-dev1*') { throw 'Unexpected product version.' }
+          $stdout = Join-Path $PWD 'artifacts/portable/release-self-test.txt'
+          $stderr = Join-Path $PWD 'artifacts/portable/release-self-test-errors.txt'
+          $process = Start-Process -FilePath $exe.FullName -ArgumentList '--self-test' -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+          if (-not $process.WaitForExit(60000)) { $process.Kill(); throw 'Published executable self-test timed out.' }
+          $process.WaitForExit()
+          if ($process.ExitCode -ne 0 -or -not ((Get-Content $stdout -Raw).Contains('37/37 tests passed.'))) { throw 'Published executable self-test failed.' }
+          $hash = (Get-FileHash $exe.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          @{ source_sha = '${{ github.sha }}'; version = $exe.VersionInfo.ProductVersion; sha256 = $hash; size = $exe.Length } | ConvertTo-Json | Set-Content artifacts/portable/build-identity.json
+      - name: Upload verified portable candidate and evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: WICI-v0.1.2-dev1-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            artifacts/portable/*
+            artifacts/caret-recovery-red.txt
+            artifacts/caret-recovery-green.txt
+          if-no-files-found: error

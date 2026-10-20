@@ -13,10 +13,11 @@ internal interface ICaretProvider
 
 internal sealed class UiaCaretProvider : ICaretProvider, IDisposable
 {
-    private readonly UIA3Automation _automation = new();
+    private readonly UIA3Automation _automation;
 
-    internal UiaCaretProvider()
+    internal UiaCaretProvider(UIA3Automation? automation = null)
     {
+        _automation = automation ?? new UIA3Automation();
         _automation.ConnectionTimeout = TimeSpan.FromMilliseconds(500);
         _automation.TransactionTimeout = TimeSpan.FromMilliseconds(750);
     }
@@ -79,6 +80,10 @@ internal sealed class UiaCaretProvider : ICaretProvider, IDisposable
                 "UIA.TextPattern.Selection");
 
             return true;
+        }
+        catch (FlaUI.Core.Exceptions.ElementNotAvailableException)
+        {
+            return false;
         }
         catch (COMException)
         {

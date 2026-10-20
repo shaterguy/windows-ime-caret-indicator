@@ -8,10 +8,11 @@ namespace WindowsImeCaretIndicator;
 
 internal sealed class Uia3Text2CaretProvider : ICaretProvider, IDisposable
 {
-    private readonly UIA3Automation _automation = new();
+    private readonly UIA3Automation _automation;
 
-    internal Uia3Text2CaretProvider()
+    internal Uia3Text2CaretProvider(UIA3Automation? automation = null)
     {
+        _automation = automation ?? new UIA3Automation();
         _automation.ConnectionTimeout = TimeSpan.FromMilliseconds(500);
         _automation.TransactionTimeout = TimeSpan.FromMilliseconds(750);
     }
@@ -65,6 +66,10 @@ internal sealed class Uia3Text2CaretProvider : ICaretProvider, IDisposable
                 "UIA3.TextPattern2.GetCaretRange");
 
             return true;
+        }
+        catch (FlaUI.Core.Exceptions.ElementNotAvailableException)
+        {
+            return false;
         }
         catch (COMException)
         {

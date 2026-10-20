@@ -388,10 +388,12 @@ internal static class SelfTests
                     "second thread acquired the owned mutex");
         }, errors);
 
+        var recoveryTests = CaretRecoveryTests.Run(errors);
+
         foreach (var error in errors)
             Console.Error.WriteLine(error);
 
-        const int total = 32;
+        var total = 32 + recoveryTests;
         Console.WriteLine($"{total - errors.Count}/{total} tests passed.");
         return errors.Count == 0 ? 0 : 1;
     }
